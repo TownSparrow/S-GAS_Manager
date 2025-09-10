@@ -1,0 +1,31 @@
+{
+  "vllm": {
+    "model_name": "Qwen/Qwen3-8B-AWQ",
+    "gpu_memory_utilization": 0.6,
+    "max_model_len": 4096,
+    "api_base": "http://localhost:8000/v1",
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "max_tokens": 256
+  },
+  "embeddings": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "similarity_metric": "cosine"
+  },
+  "database": {
+    "chroma_persist_dir": "data/chroma_db"
+  },
+  "graph": {
+    "alpha": 0.6,
+    "beta": 0.4
+  },
+  "swap": {
+    "threshold": 0.3,
+    "prefetch_count": 5,
+    "memory_check_interval": 50
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8080
+  }
+}
