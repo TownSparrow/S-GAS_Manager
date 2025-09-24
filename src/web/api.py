@@ -1,33 +1,67 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from modules.retrieval.embedder import get_embeddings
-from config import settings
+from src.modules.retrieval.embedder import get_embeddings
+from src.config import settings
 import httpx
 import logging
+from pathlib import Path
+from datetime import datetime, timezone
+
 
 # Setting up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 app = FastAPI(title="S-GAS Manager API", version="0.1.0")
+
 
 # CORS settings for access from browser
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000",
+                   "http://localhost:8080", "http://127.0.0.1:8080"], # or ["*"] (but not for the production)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# Connecting the static files for web-client
+static_dir = Path(__file__).parent / "static"
+if not static_dir.exists():
+    static_dir.mkdir()
+
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
 class ChatRequest(BaseModel):
     message: str
     use_rag: bool = True
 
+
 class ChatResponse(BaseModel):
     response: str
     metadata: dict = {}
+
+
+@app.get("/")
+async def serve_web_client():
+    """ Main page - web-client """
+    static_index = static_dir / "index.html"
+    if static_index.exists():
+        return FileResponse(str(static_index))
+    else:
+        return {
+            "message": "S-GAS Manager API",
+            "version": "0.1.0",
+            "endpoints": ["/api/chat", "/health"],
+            "web_client": "No files in src/web/static/"
+        }
+
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
@@ -87,7 +121,9 @@ Answer briefly and to the point."""
                     response=answer,
                     metadata={
                         "embedding_shape": query_embedding.shape,
-                        "model_used": settings.VLLM_MODEL_NAME
+                        "model_used": settings.VLLM_MODEL_NAME,
+                        "use_rag": request.use_rag,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
                     }
                 )
                 
@@ -126,11 +162,11 @@ async def health_check():
     }
 
 
-@app.get("/")
-async def root():
-    """ Root endpoint """
-    return {
-        "message": "S-GAS Manager API",
-        "version": "0.1.0",
-        "endpoints": ["/api/chat", "/health"]
-    }
+# @app.get("/")
+# async def root():
+#     """ Root endpoint """
+#     return {
+#         "message": "S-GAS Manager API",
+#         "version": "0.1.0",
+#         "endpoints": ["/api/chat", "/health"]
+#     }

@@ -5,7 +5,9 @@ import asyncio
 from typing import List
 import logging
 
+
 logger = logging.getLogger(__name__)
+
 
 class EmbeddingManager:
     """ Manager for working with embeddings """
@@ -20,7 +22,7 @@ class EmbeddingManager:
         try:
             # Late import to avoid cyclical import
             if self.config is None:
-                from config import settings
+                from src.config import settings  # ИСПРАВЛЕНО
                 model_name = settings.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
             else:
                 model_name = self.config.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
@@ -34,7 +36,7 @@ class EmbeddingManager:
         """ Getting Embeddings via vLLM API """
         # Late import
         if self.config is None:
-            from config import settings
+            from src.config import settings  # ИСПРАВЛЕНО
             api_url = settings.get('vllm.api_base', 'http://localhost:8000/v1')
             model_name = settings.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
         else:
@@ -76,8 +78,10 @@ class EmbeddingManager:
             logger.info("Switching to a local embedding model")
             return self.get_embeddings_local(texts)
 
+
 # Global instance
 embedding_manager = EmbeddingManager()
+
 
 async def get_embeddings(texts: List[str]) -> np.ndarray:
     """ Wrapper function for getting embeddings """
