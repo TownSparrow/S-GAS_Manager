@@ -20,7 +20,7 @@ class Settings:
         self._create_compatibility_attributes()
         
     def _load_config(self) -> dict:
-        """ Loading configuration from JSON-file"""
+        """ Loading configuration from JSON-file, fallback if file missing/bitten """
         try:
             if not self.config_path.exists():
                 raise FileNotFoundError(f"Config file not found: {self.config_path}")
@@ -45,7 +45,7 @@ class Settings:
             "vllm": {
                 "model_name": "Qwen/Qwen3-8B-AWQ",
                 "gpu_memory_utilization": 0.8,
-                "max_model_len": 8192,
+                "max_model_len": 4096,
                 "api_base": "http://localhost:8000/v1",
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -55,8 +55,16 @@ class Settings:
                 "model": "sentence-transformers/all-MiniLM-L6-v2",
                 "similarity_metric": "cosine"
             },
+            "rag": {
+                "top_k": 5
+            },
+            "chunking": {
+                "max_chunk_size": 512,
+                "overlap_size": 50
+            },
             "database": {
-                "chroma_persist_dir": "data/chroma_db"
+                "chroma_persist_dir": "data/chroma_db",
+                "collections": "documents"
             },
             "graph": {
                 "alpha": 0.6,
@@ -75,50 +83,25 @@ class Settings:
     
     def _create_compatibility_attributes(self):
         """ Creating attributes for backward compatibility with existing code """
-        # vLLM settings
-        self.VLLM_MODEL_NAME = self.get('vllm.model_name', 'Qwen/Qwen3-8B-AWQ')
-        self.VLLM_API_URL = self.get('vllm.api_base', 'http://localhost:8000/v1')
-        
-        # Embedding settings
-        self.EMBEDDING_MODEL_NAME = self.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
-        
-        # API settings
-        self.API_HOST = self.get('api.host', '0.0.0.0')
-        self.API_PORT = self.get('api.port', 8080)
-        
-        # Chroma DB settings
-        self.CHROMA_PERSIST_DIR = self.get('database.chroma_persist_dir', 'data/chroma_db')
-        
-        # Creating a vllm_config object for compatibility
+        self.VLLM_MODEL_NAME = self.settings['vllm']['model_name']
+        self.VLLM_API_URL = self.settings['vllm']['api_base']
+        self.EMBEDDING_MODEL_NAME = self.settings['embeddings']['model']
+        self.API_HOST = self.settings['api']['host']
+        self.API_PORT = self.settings['api']['port']
+        self.CHROMA_PERSIST_DIR = self.settings['database']['chroma_persist_dir']
+        self.COLLECTION_NAME = self.settings['database'].get('collection_name', 'documents')
         self.vllm_config = VLLMConfig(
-            gpu_memory_utilization=self.get('vllm.gpu_memory_utilization', 0.8),
-            max_model_len=self.get('vllm.max_model_len', 8192),
-            temperature=self.get('vllm.temperature', 0.7),
-            top_p=self.get('vllm.top_p', 0.9),
-            max_tokens=self.get('vllm.max_tokens', 256)
+            gpu_memory_utilization=self.settings['vllm']['gpu_memory_utilization'],
+            max_model_len=self.settings['vllm']['max_model_len'],
+            temperature=self.settings['vllm']['temperature'],
+            top_p=self.settings['vllm']['top_p'],
+            max_tokens=self.settings['vllm']['max_tokens']
         )
-
-    def get(self, key_path: str, default=None):
-        """
-        Gets the value by key path (eg 'vllm.model_name')
-        
-        Args:
-            key_path: Path to the key using a dot
-            default: Default value
-        """
-        keys = key_path.split('.')
-        value = self.settings
-        
-        try:
-            for key in keys:
-                value = value[key]
-            return value
-        except (KeyError, TypeError):
-            logger.warning(f"Key '{key_path}' not found, using default value:: {default}")
-            return default
     
     def __getitem__(self, key):
         """ Allows access as settings['vllm'] """
+        if key not in self.settings:
+            raise KeyError(f"Section '{key}' missing in config! Check your system_params.json.")
         return self.settings[key]
     
     def __contains__(self, key):
@@ -128,8 +111,7 @@ class Settings:
 class VLLMConfig:
     """ Configuration for vLLM """
     
-    def __init__(self, gpu_memory_utilization=0.8, max_model_len=8192, 
-                 temperature=0.7, top_p=0.9, max_tokens=256):
+    def __init__(self, gpu_memory_utilization=0.6, max_model_len=4096, temperature=0.8, top_p=0.9, max_tokens=256):
         self.gpu_memory_utilization = gpu_memory_utilization
         self.max_model_len = max_model_len
         self.temperature = temperature

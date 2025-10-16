@@ -22,21 +22,18 @@ class EmbeddingManager:
         try:
             # Late import to avoid cyclical import
             if self.config is None:
-                from src.config import settings  # ИСПРАВЛЕНО
-                model_name = settings.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
-            else:
-                model_name = self.config.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
-                
-            self.local_model = SentenceTransformer(model_name)
-            logger.info(f"Local embedding model loaded: {model_name}")
+                from src.config import settings
+                model_name = settings['embeddings']['model']
+                self.local_model = SentenceTransformer(model_name)
+                logger.info(f"Local embedding model loaded: {model_name}")
         except Exception as e:
-            logger.warning(f"Failed to load local model: {e}")
+            logger.warning(f"Failed to load local model: {e}", exc_info=True)
     
     async def get_embeddings_via_api(self, texts: List[str]) -> np.ndarray:
         """ Getting Embeddings via vLLM API """
         # Late import
         if self.config is None:
-            from src.config import settings  # ИСПРАВЛЕНО
+            from src.config import settings
             api_url = settings.get('vllm.api_base', 'http://localhost:8000/v1')
             model_name = settings.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
         else:

@@ -11,8 +11,8 @@ sys.path.insert(0, str(project_root))
 src_path = Path(__file__).parent
 sys.path.insert(0, str(src_path))
 
-from modules.retrieval.embedder import get_embeddings
-from config import settings
+from src.modules.retrieval.embedder import get_embeddings
+from src.config import settings
 
 # Setting up logging
 logging.basicConfig(

@@ -12,8 +12,16 @@
     "model": "sentence-transformers/all-MiniLM-L6-v2",
     "similarity_metric": "cosine"
   },
+  "rag": {
+    "top_k": 5
+  },
+  "chunking": {
+    "max_chunk_size": 512,
+    "overlap_size": 50
+  },
   "database": {
-    "chroma_persist_dir": "data/chroma_db"
+    "chroma_persist_dir": "data/chroma_db",
+    "collection_name": "documents"
   },
   "graph": {
     "alpha": 0.6,

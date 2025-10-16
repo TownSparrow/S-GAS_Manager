@@ -14,7 +14,8 @@ pip install --upgrade pip setuptools wheel
 echo "4. Installing core dependencies from requirements.txt..."
 pip install -r other/requirements.txt
 
-echo "5. Downloading spaCy model for Russian (medium model, more accurate)..."
+echo "5. Downloading spaCy model for English and Russian (medium model, more accurate)..."
+python -m spacy download en_core_web_sm
 python -m spacy download ru_core_news_md
 
 echo "Installation complete! Don't forget to activate the environment with: source S-GAS_Manager_env/bin/activate"
