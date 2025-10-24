@@ -1,9 +1,9 @@
 {
   "vllm": {
-    "model_name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
-    "gpu_memory_utilization": 0.75,
+    "model_name": "Qwen/Qwen2.5-14B-Instruct-GPTQ-Int4",
+    "gpu_memory_utilization": 0.85,
     "max_model_len": 8192,
-    "quantization": "awq_marlin",
+    "quantization": "gptq",
     "dtype": "auto",
     "trust_remote_code": true,
     "api_base": "http://localhost:8000/v1",
