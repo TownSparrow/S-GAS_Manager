@@ -21,6 +21,7 @@ openpyxl>=3.1.0
 # --- Graph processes ---
 networkx>=3.2
 spacy>=3.7.0
+matplotlib>=3.7.0
 
 # --- Web-API and processing ---
 fastapi>=0.115.0

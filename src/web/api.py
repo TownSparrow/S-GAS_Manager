@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+import time
 
 # Configs and modules
 from src.config import settings
@@ -17,6 +18,9 @@ from src.modules.retrieval.vector_store import ChromaVectorStore
 from src.modules.retrieval.chunking import SemanticChunker
 from src.modules.retrieval.document_processor import DocumentProcessor
 from src.modules.retrieval.embedder import get_embeddings
+from src.modules.graph.graph_builder import KnowledgeGraphBuilder
+from src.core.scoring import HybridScorer
+from src.modules.swap.swap_manager import SwapManager
 
 # -----------------------------------------------------------------------------
 # Init of app and basic services
@@ -42,20 +46,56 @@ async def lifespan(app: FastAPI):
     )
     try:
         document_processor = DocumentProcessor(vector_store=vector_store, chunker=chunker)
+        
+        # 1. Graph Builder
+        graph_builder = KnowledgeGraphBuilder(
+            spacy_model="ru_core_news_md", # or "en_core_web_sm"
+            use_gpu=False # True if GPU is free
+        )
+        logger.info("✅ KnowledgeGraphBuilder is initialized")
+
+        # 2. Hybrid Scorer
+        hybrid_scorer = HybridScorer(
+            alpha=settings['graph']['alpha'],
+            beta=settings['graph']['beta']
+        )
+        logger.info("✅ HybridScorer is initialized")
+
+        # 3. Swap Manager
+        swap_manager = SwapManager(
+            threshold=settings['swap']['threshold'],
+            prefetch_count=settings['swap']['prefetch_count'],
+            memory_check_interval_ms=settings['swap']['memory_check_interval'],
+            max_gpu_memory_tokens=settings['vllm']['max_model_len']
+        )
+        logger.info("✅ SwapManager is initialized")
+
+        # Standart components for inference
         app.state.vector_store = vector_store
         app.state.chunker = chunker
         app.state.document_processor = document_processor
+
+        # Algorithm components
+        app.state.graph_builder = graph_builder
+        app.state.hybrid_scorer = hybrid_scorer
+        app.state.swap_manager = swap_manager
+
         logger.info("✅ All S-GAS components initialized with config parameters")
     except Exception as e:
         logger.error(f"❌ Failed to initialize components: {e}")
     yield
+    
+    # Cleanup
     app.state.vector_store = None
     app.state.chunker = None
     app.state.document_processor = None
+    app.state.graph_builder = None
+    app.state.hybrid_scorer = None
+    app.state.swap_manager = None
 
 app = FastAPI(
     title="S-GAS Manager API",
-    version="0.1.2",
+    version="0.1.3",
     lifespan=lifespan,
 )
 
@@ -72,7 +112,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Статика
+# Static
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # -----------------------------------------------------------------------------
@@ -154,53 +194,216 @@ async def serve_web_client():
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     try:
-        logger.info(f"Request receieved: {request.message}")
+        logger.info(f"Request received: {request.message}")
 
         # 1) Embedding of request
-        query_embedding = await get_embeddings([request.message])
         try:
-            dim = getattr(query_embedding, "shape", None)
-            logger.info(f"Embedding is recieved. Dimension is : {dim}")
-        except Exception:
-            logger.info("Embedding is recieved.")
+            query_embedding = await get_embeddings([request.message])
+            query_embedding_vec = query_embedding[0] if len(query_embedding.shape) > 1 else query_embedding
+            logger.info(f"✅ Embedding received. Shape: {query_embedding.shape}")
+        except (AttributeError, IndexError, TypeError) as e:
+            logger.error(f"❌ Failed to process embedding shape: {e}")
+            raise HTTPException(status_code=500, detail="Embedding processing failed")
 
         # 2) Search of context (optionally)
         context_chunks: List[Dict[str, Any]] = []
+        reranked_chunks: List[Dict[str, Any]] = []
+
         if request.use_rag:
             try:
                 vector_store = app.state.vector_store
                 if vector_store is not None:
+                    # Recieving more chunks for the next reranking
+                    initial_top_k = max(20, request.n_chunks * 3)
+                    
                     context_chunks = await vector_store.search(
                         query_embedding,
-                        top_k=max(1, int(request.n_chunks)),
+                        top_k = initial_top_k, #top_k=max(1, int(request.n_chunks)),
                     )
-                    logger.info(f"Retrieved {len(context_chunks)} context chunks")
+                    logger.info(f"Retrieved {len(context_chunks)} starting context chunks")
+                else:
+                    logger.warning("⚠️ Vector store is None, skipping RAG")
             except Exception as e:
-                logger.warning(f"RAG search failed: {e}")
+                logger.warning(f"❌ RAG search failed: {e}")
+                context_chunks = []
 
-        # 3) Prompt is always defined
-        enhanced_prompt = build_prompt(context_chunks, request.message)
+        reranked_chunks = context_chunks.copy()
 
-        # 4) Calling vLLM
-        overrides = {
-            "temperature": request.temperature,
-            "top_p": request.top_p,
-            "max_tokens": request.max_tokens,
-        }
-        data = await call_vllm_chat(enhanced_prompt, overrides)
+        # 3) S-GAS Algorithm: Reranking
+        if request.use_rag and len(context_chunks) > 0:
+            # Algorithm Stage 1. Building graph and calculating distances
+            try:
+                logger.info("🔄 S-GAS Algorithm Stage 1: Building knowledge-graph...")
 
-        # 5) Response
-        msg = data["choices"][0]["message"]
-        answer = msg.get("content", "")
+                # Recieving embeddings of all chunks
+                chunk_texts = [c.get('text', '') for c in context_chunks]
+                chunk_embeddings = await get_embeddings(chunk_texts)
 
-        usage = data.get("usage", {})
+                # Building knowledge-graph
+                graph_builder = app.state.graph_builder
+                
+                if graph_builder is None:
+                    raise ValueError("Graph builder is not initialized")
+                
+                graph = graph_builder.build_graph(context_chunks, chunk_embeddings)
+
+                # Calculating graph distances
+                chunk_ids = [c.get('id', f'chunk_{i}') for i, c in enumerate(context_chunks)]
+                graph_distances = graph_builder.compute_graph_distances(
+                    request.message, 
+                    chunk_ids
+                )
+
+                logger.info(f"✅ Knowledge-graph built with {graph.number_of_nodes()} nodes and {graph.number_of_edges()} edges")
+                logger.info(f"✅ Graph distances calculated for {len(graph_distances)} chunks")
+            except Exception as e:
+                logger.warning(f"❌ Knowledge-graph building failed: {e}")
+                # Continue with original context chunks if graph building fails
+                graph_distances = {}
+                chunk_embeddings = await get_embeddings(chunk_texts) if 'chunk_texts' in locals() else None
+
+            # Algorithm Stage 2. Reranking
+            try:
+                logger.info("🔄 S-GAS Algorithm Stage 2: Reranking chunks via S-GAS...")
+
+                # Calculating scores of chunks
+                hybrid_scorer = app.state.hybrid_scorer
+                if hybrid_scorer is None:
+                    raise ValueError("Hybrid scorer is not initialized")
+
+                if 'chunk_embeddings' not in locals() or chunk_embeddings is None:
+                    chunk_texts = [c.get('text', '') for c in context_chunks]
+                    chunk_embeddings = await get_embeddings(chunk_texts)
+
+                if not graph_distances:
+                    logger.warning("⚠️ Graph distances are empty, using default distances")
+                    graph_distances = {c.get('id', f'chunk_{i}'): 1000.0 for i, c in enumerate(context_chunks)}
+
+                # Reranking the chunks
+                reranked_chunks = hybrid_scorer.rerank_chunks(
+                    query_embedding_vec,
+                    context_chunks,
+                    chunk_embeddings,
+                    graph_distances,
+                    top_k=request.n_chunks
+                )
+
+                logger.info(f"✅ Chunks were reranked via S-GAS Algorithm. Top-{request.n_chunks} were selected.")
+            except Exception as e:
+                logger.warning(f"❌ Reranking process failed: {e}")
+                logger.info("⚠️ Using original context chunks as fallback")
+
+            # Algorithm Stage 3. Swapping data
+            try:
+                logger.info("🔄 S-GAS Algorithm Stage 3. Managing memory swap...")
+
+                swap_manager = app.state.swap_manager
+                if swap_manager is None:
+                    raise ValueError("Swap manager is not initialized")
+                        
+                # Initializing chunks in swap manager (for the first time)
+                if not hasattr(app.state, '_swap_initialized'):
+                    swap_manager.initialize_chunks(reranked_chunks)
+                    app.state._swap_initialized = True
+                    logger.debug(f"🔧 Swap manager initialized with {len(reranked_chunks)} chunks")
+                        
+                # Updating the prefetch buffer
+                swap_manager.update_prefetch_buffer(reranked_chunks)
+                logger.debug(f"🔧 Prefetch buffer updated with {len(reranked_chunks)} chunks")
+                        
+                # Making a decision about swapping
+                current_context_tokens = sum(
+                    c.get('metadata', {}).get('chunk_size', 500) 
+                    for c in reranked_chunks
+                )
+                        
+                swap_decision = swap_manager.decide_swap_action(
+                    reranked_chunks,
+                    current_context_tokens
+                )
+                        
+                # Perform swapping (if necessary)
+                swap_manager.execute_swap_decision(swap_decision)
+                        
+                logger.info(f"✅ Swapping completed: {swap_decision.get('action', 'none')}")
+            except Exception as e:
+                logger.warning(f"❌ Swapping failed: {e}")
+                logger.info("⚠️ Continuing without swap optimization")
+
+        # 4) Generate prompt with context
+        final_context = reranked_chunks if reranked_chunks else context_chunks
+        enhanced_prompt = build_prompt(final_context, request.message)
+        logger.debug(f"📝 Prompt built with {len(final_context)} context chunks")
+
+        # 5) Calling vLLM
+        try:
+            overrides = {
+                "temperature": request.temperature,
+                "top_p": request.top_p,
+                "max_tokens": request.max_tokens,
+            }
+            
+            # Measuring inference time for swap_manager
+            inference_start = time.time()
+            data = await call_vllm_chat(enhanced_prompt, overrides)
+            inference_time = time.time() - inference_start
+            
+            # Recording the T_comp metric
+            swap_manager = app.state.swap_manager
+            if swap_manager is not None:
+                swap_manager.record_compute_time(inference_time)
+            
+            logger.info(f"⏱️⏱️⏱️ Inference completed in {inference_time:.3f}s")
+            
+        except Exception as e:
+            logger.error(f"❌ vLLM inference failed: {e}")
+            raise HTTPException(status_code=500, detail="Inference generation failed")
+
+        # 6) Response
+        try:
+            msg = data["choices"][0]["message"]
+            answer = msg.get("content", "")
+            usage = data.get("usage", {})
+        except (KeyError, IndexError, TypeError) as e:
+            logger.error(f"❌ Failed to parse vLLM response: {e}")
+            raise HTTPException(status_code=500, detail="Failed to parse model response")
+        
+        # 7) S-GAS Statistics
+        sgas_stats = {}
+        try:
+            graph_builder = app.state.graph_builder
+            swap_manager = app.state.swap_manager
+            
+            if graph_builder is not None:
+                sgas_stats['graph_stats'] = graph_builder.get_graph_statistics()
+            else:
+                sgas_stats['graph_stats'] = {"error": "Graph builder not initialized"}
+            
+            if swap_manager is not None:
+                sgas_stats['swap_stats'] = swap_manager.get_statistics()
+            else:
+                sgas_stats['swap_stats'] = {"error": "Swap manager not initialized"}
+                
+            logger.debug("✅ S-GAS statistics collected")
+            
+        except Exception as e:
+            logger.warning(f"❌ Failed to collect S-GAS statistics: {e}")
+            sgas_stats = {
+                "error": str(e),
+                "graph_stats": None,
+                "swap_stats": None
+            }
+        
+        # 8) Return response
         return ChatResponse(
             response=answer,
             metadata={
                 "usage": usage,
                 "model_used": settings['vllm']['model_name'],
                 "use_rag": request.use_rag,
-                "context_chunks_used": len(context_chunks),
+                "context_chunks_used": len(final_context),
+                "inference_time_sec": inference_time,
+                "sgas_statistics": sgas_stats,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -208,7 +411,7 @@ async def chat_endpoint(request: ChatRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Unexpected error in /api/chat: {e}")
+        logger.exception(f"❌ Unexpected error in /api/chat: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/upload-document")
@@ -219,11 +422,11 @@ async def upload_document(file: UploadFile = File(...)):
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        logger.info(f"File uploaded: {file.filename} ({file_path.stat().st_size} bytes)")
+        logger.info(f"✅ File uploaded: {file.filename} ({file_path.stat().st_size} bytes)")
         result = await app.state.document_processor.process_document(file_path)
         return result
     except Exception as e:
-        logger.error(f"Error uploading document: {e}")
+        logger.error(f"❌ Error uploading document: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @app.get("/api/documents")
@@ -242,10 +445,10 @@ async def delete_document(filename: str):
         raise HTTPException(status_code=404, detail="Document not found")
     try:
         file_path.unlink()
-        logger.info(f"Deleted document: {filename}")
+        logger.info(f"✅ Deleted document: {filename}")
         return {"message": f"Document {filename} deleted successfully"}
     except Exception as e:
-        logger.error(f"Error deleting document: {e}")
+        logger.error(f"❌ Error deleting document: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete document")
 
 @app.get("/health")
@@ -264,3 +467,28 @@ async def health_check():
         "model": settings['vllm']['model_name'],
         "time": datetime.now(timezone.utc).isoformat(),
     }
+
+@app.get("/api/sgas-statistics")
+async def get_sgas_statistics():
+    try:
+        graph_builder = app.state.graph_builder
+        hybrid_scorer = app.state.hybrid_scorer
+        swap_manager = app.state.swap_manager
+        
+        statistics = {
+            "graph": graph_builder.get_graph_statistics() if graph_builder else {},
+            "swap": swap_manager.get_statistics() if swap_manager else {},
+            "scorer": {
+                "alpha": hybrid_scorer.alpha if hybrid_scorer else 0.6,
+                "beta": hybrid_scorer.beta if hybrid_scorer else 0.4
+            }
+        }
+        
+        return JSONResponse(content=statistics, status_code=200)
+        
+    except Exception as e:
+        logger.error(f"❌ Error of recieving the statistics of S-GAS Algorithm: {e}")
+        return JSONResponse(
+            content={"error": str(e)}, 
+            status_code=500
+        )
