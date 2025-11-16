@@ -2,12 +2,14 @@ import asyncio
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
+
 from .document_loader import DocumentLoader, PDFLoader, TextLoader, DOCXLoader
 from .chunking import SemanticChunker
 from .vector_store import ChromaVectorStore
 from .embedder import get_embeddings
 
 logger = logging.getLogger(__name__)
+
 
 class DocumentProcessor:
     """Main document processing pipeline"""
@@ -24,9 +26,12 @@ class DocumentProcessor:
             '.doc': DOCXLoader(),
         }
     
+
     async def process_document(self, file_path: Path, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Process a single document"""
-        
+        """
+        Process a single document with adaptive chunking
+        """
+
         if not file_path.exists():
             raise FileNotFoundError(f"Document not found: {file_path}")
         
@@ -50,37 +55,37 @@ class DocumentProcessor:
             **(metadata or {})
         }
         
-        # Step 3: Chunk document
-        chunks = self.chunker.chunk_document(document_data['text'], doc_metadata)
+        # Step 3: Creating a full chunk pool
+        all_chunks = self.chunker.initialize_document(document_data['text'], doc_metadata)
         
         # Step 4: Generate embeddings
-        chunk_texts = [chunk['text'] for chunk in chunks]
+        chunk_texts = [chunk['text'] for chunk in all_chunks]
         embeddings = await get_embeddings(chunk_texts)
         
         # Step 5: Store in vector database
-        await self.vector_store.add_chunks(chunks, embeddings)
+        await self.vector_store.add_chunks(all_chunks, embeddings)
         
         result = {
             'document_id': doc_metadata['document_id'],
             'filename': file_path.name,
-            'chunks_count': len(chunks),
-            'total_tokens': sum(len(chunk['text'].split()) for chunk in chunks),
+            'chunks_count': len(all_chunks),
+            'total_tokens': sum(len(chunk['text'].split()) for chunk in all_chunks),
             'status': 'success'
         }
         
-        logger.info(f"Successfully processed {file_path.name}: {len(chunks)} chunks created")
+        logger.info(f"✅ Successfully processed {file_path.name}: {len(all_chunks)} chunks created")
+        
         return result
     
+
     async def process_directory(self, directory_path: Path, recursive: bool = True) -> List[Dict[str, Any]]:
         """Process all supported documents in a directory"""
-        
         if not directory_path.exists() or not directory_path.is_dir():
             raise ValueError(f"Invalid directory: {directory_path}")
         
         # Find all supported files
         pattern = "**/*" if recursive else "*"
         supported_extensions = set(self.loaders.keys())
-        
         files_to_process = [
             f for f in directory_path.glob(pattern)
             if f.is_file() and f.suffix.lower() in supported_extensions
@@ -88,8 +93,7 @@ class DocumentProcessor:
         
         logger.info(f"Found {len(files_to_process)} documents to process")
         
-        # Process files concurrently (but limit concurrency to avoid overwhelming the system)
-        semaphore = asyncio.Semaphore(3)  # Process max 3 files simultaneously
+        semaphore = asyncio.Semaphore(3)
         
         async def process_with_semaphore(file_path):
             async with semaphore:
