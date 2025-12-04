@@ -27,11 +27,33 @@ class DocumentProcessor:
         }
     
 
-    async def process_document(self, file_path: Path, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def process_document(self, 
+                          file_path: Path, 
+                          session_id: str,
+                          metadata: Optional[Dict[str, Any]] = None
+                          ) -> Dict[str, Any]:
         """
-        Process a single document with adaptive chunking
+        Process a single document with adaptive chunking and session-based tracking
+        
+        Args:
+            file_path: Path to the document
+            session_id: ID of the session
+            metadata: Optional metadata for the document
+            
+        Returns:
+            Dictionary containing processing results
+
+        Process:
+        1. Load document
+        2. Prepare metadata without priorities
+        3. Divide into chunks
+        4. Generate embeddings
+        5. Save in vector store
         """
 
+        if not session_id:
+            raise ValueError("⚠️ Warning: session_id is required!")
+        
         if not file_path.exists():
             raise FileNotFoundError(f"Document not found: {file_path}")
         
@@ -48,15 +70,22 @@ class DocumentProcessor:
         # Step 2: Prepare metadata
         doc_metadata = {
             'document_id': file_path.stem,
-            'filename': file_path.name,
+            'document_name': file_path.name,
             'file_path': str(file_path),
             'file_extension': file_extension,
             'file_size': file_path.stat().st_size,
+            'uploaded_at': datetime.now(timezone.utc).isoformat(),
+            'session_id': session_id,
+            'document_type': metadata.get('document_type', 'general') if metadata else 'general',
             **(metadata or {})
         }
         
         # Step 3: Creating a full chunk pool
-        all_chunks = self.chunker.initialize_document(document_data['text'], doc_metadata)
+        all_chunks = self.chunker.initialize_document(
+            document_data['text'],
+            doc_metadata,
+            session_id=session_id
+        )
         
         # Step 4: Generate embeddings
         chunk_texts = [chunk['text'] for chunk in all_chunks]
@@ -65,13 +94,11 @@ class DocumentProcessor:
         # Step 5: Store in vector database
         await self.vector_store.add_chunks(all_chunks, embeddings)
         
-        result = {
-            'document_id': doc_metadata['document_id'],
-            'filename': file_path.name,
-            'chunks_count': len(all_chunks),
-            'total_tokens': sum(len(chunk['text'].split()) for chunk in all_chunks),
-            'status': 'success'
-        }
+        result = await self.vector_store.add_chunks(
+            all_chunks,
+            embeddings,
+            session_id=session_id
+        )
         
         logger.info(f"✅ Successfully processed {file_path.name}: {len(all_chunks)} chunks created")
         
