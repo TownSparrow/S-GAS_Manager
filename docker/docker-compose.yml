@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  rag-api:
+    build: .
+    ports:
+      - "8001:8001"
+    environment:
+      - APP_VERSION=0.01
+      - VLLM_API_URL=http://vllm-server:8000/v1
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - vllm-server
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  vllm-server:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL=Qwen/Qwen3-8B-AWQ
+      - GPU_MEMORY_UTILIZATION=0.8
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
