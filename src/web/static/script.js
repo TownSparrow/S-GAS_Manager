@@ -1,6 +1,7 @@
 class SGASWebClient {
     constructor() {
-        this.apiUrl = 'http://127.0.0.1:8080';
+        this.apiUrl = 'http://localhost:8080';
+        this.sessionId = null;
         this.messageCount = 0;
         this.chatHistory = [];
         this.uploadedFilesSession = [];
@@ -12,16 +13,46 @@ class SGASWebClient {
         }
     }
 
-    initialize() {
-        console.log('Initializing S-GAS Web Client...');
+    async initialize() {
+        console.log('🚀 Initializing S-GAS Web Client...');
         this.initializeElements();
         this.bindEvents();
+        await this.initializeSession();
         this.checkServerStatus();
-        this.loadUploadedFiles();
-        console.log('S-GAS Web Client initialized successfully');
+        await this.loadUploadedFiles();
+        console.log('✅ S-GAS Web Client initialized successfully');
+    }
+
+    async initializeSession() {
+        try {
+            console.log('📍 Creating session...');
+            
+            const response = await fetch(`${this.apiUrl}/api/session/new`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: 'web-user' })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: Failed to create session`);
+            }
+            
+            const data = await response.json();
+            this.sessionId = data.session_id;
+            
+            localStorage.setItem('sessionId', this.sessionId);
+            
+            console.log('✅ Session initialized:', this.sessionId);
+            this.addMessage('system', `✅ Session created: ${this.sessionId}`, true);
+            
+        } catch (error) {
+            console.error('❌ Session initialization failed:', error);
+            this.addMessage('system', `❌ Failed to initialize session: ${error.message}`, true);
+        }
     }
 
     initializeElements() {
+        // Message Elements
         this.messageForm = document.getElementById('messageForm');
         this.messageInput = document.getElementById('messageInput');
         this.sendButton = document.getElementById('sendButton');
@@ -51,7 +82,7 @@ class SGASWebClient {
         // Spinner
         this.spinner = document.getElementById('spinner');
 
-        console.log('Elements initialized');
+        console.log('✅ Elements initialized');
     }
 
     bindEvents() {
@@ -121,7 +152,7 @@ class SGASWebClient {
             });
         }
 
-        console.log('Events bound successfully');
+        console.log('✅ Events bound successfully');
     }
 
     // Separate reasoning from final answer
@@ -167,6 +198,11 @@ class SGASWebClient {
     async handleFileUpload(files) {
         if (!files || files.length === 0) return;
 
+        if (!this.sessionId) {
+            this.addMessage('system', '❌ Session not initialized', true);
+            return;
+        }
+
         const allowedTypes = ['.pdf', '.txt', '.docx', '.doc'];
         const validFiles = Array.from(files).filter(file => {
             const extension = '.' + file.name.split('.').pop().toLowerCase();
@@ -174,7 +210,7 @@ class SGASWebClient {
         });
 
         if (validFiles.length === 0) {
-            this.addMessage('system', 'Supported file types: PDF, TXT, DOCX, DOC', true);
+            this.addMessage('system', '⚠️ Supported file types: PDF, TXT, DOCX, DOC', true);
             return;
         }
 
@@ -184,13 +220,78 @@ class SGASWebClient {
             try {
                 await this.uploadFile(file);
             } catch (error) {
-                console.error('Error uploading file:', error);
+                console.error('❌ Upload error:', error);
                 this.addFileUploadMessage(file.name, 'error', error.message);
             }
         }
-
         // Clear the file input after upload
         this.clearFileInput();
+    }
+
+    displaySelectedFiles(files) {
+        if (!this.fileList) return;
+        
+        this.fileList.innerHTML = '';
+        this.fileList.classList.remove('hidden');
+        
+        files.forEach(file => {
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item';
+            fileItem.innerHTML = `
+                <span class="file-name">${file.name}</span>
+                <span class="file-size">${(file.size / 1024).toFixed(2)} KB</span>
+                <span class="file-status">⏳ Uploading...</span>
+            `;
+            this.fileList.appendChild(fileItem);
+        });
+    }
+
+    async uploadFile(file) {
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('document_type', 'general');
+
+            this.spinner.classList.remove('hidden');
+
+            console.log(`📤 Uploading ${file.name} to session ${this.sessionId}...`);
+
+            const response = await fetch(
+                `${this.apiUrl}/api/session/${this.sessionId}/upload-document`,
+                {
+                    method: 'POST',
+                    body: formData
+                }
+            );
+
+            this.spinner.classList.add('hidden');
+
+            if (!response.ok) {
+                throw new Error(`❌ HTTP ${response.status}: Upload failed`);
+            }
+
+            const data = await response.json();
+
+            // Track uploaded file
+            this.uploadedFilesSession.push({
+                name: file.name,
+                size: file.size,
+                timestamp: new Date().toISOString()
+            });
+            
+            console.log(`✅ File uploaded: ${file.name}`);
+            
+            this.addFileUploadMessage(
+                file.name,
+                'success',
+                `✅ Loaded successfully! ${data.chunks_created || '?'} chunks created`
+            );
+        } catch (error) {
+            this.spinner.classList.add('hidden');
+            console.error('❌ Upload error: ', error);
+            this.addFileUploadMessage(file.name, 'error', error.message);
+        }
+
     }
 
     clearFileInput() {
@@ -205,588 +306,284 @@ class SGASWebClient {
         }
     }
 
-    displaySelectedFiles(files) {
-        if (!this.fileList) return;
-        
-        this.fileList.innerHTML = '';
-        this.fileList.classList.remove('hidden');
-
-        files.forEach(file => {
-            const fileItem = document.createElement('div');
-            fileItem.className = 'file-item';
-            fileItem.innerHTML = `
-                <div class="file-info">
-                    <span class="file-name">${file.name}</span>
-                    <span class="file-size">${this.formatFileSize(file.size)}</span>
-                </div>
-                <div class="file-status">
-                    <div class="upload-progress">
-                        <div class="progress-bar">
-                            <div class="progress-fill" style="width: 0%"></div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            this.fileList.appendChild(fileItem);
-        });
-    }
-
-    async uploadFile(file) {
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const fileItem = Array.from(this.fileList.children).find(item => 
-            item.querySelector('.file-name').textContent === file.name
-        );
-
-        try {
-            const response = await fetch(`${this.apiUrl}/api/upload-document`, {
-                method: 'POST',
-                body: formData
-            });
-
-            if (response.ok) {
-                const result = await response.json();
-                
-                if (fileItem) {
-                    const progressFill = fileItem.querySelector('.progress-fill');
-                    progressFill.style.width = '100%';
-                    progressFill.style.backgroundColor = 'var(--color-success)';
-                    
-                    const fileStatus = fileItem.querySelector('.file-status');
-                    fileStatus.innerHTML = '<span class="status status--success">✓ Uploaded</span>';
-                }
-
-                this.uploadedFilesSession.push({
-                    name: file.name,
-                    size: file.size,
-                    uploadTime: new Date()
-                });
-                
-                // Add file upload message with delete button
-                this.addFileUploadMessage(file.name, 'success');
-                
-                setTimeout(() => this.loadUploadedFiles(), 500);
-
-            } else {
-                throw new Error(`HTTP ${response.status}`);
-            }
-        } catch (error) {
-            if (fileItem) {
-                const fileStatus = fileItem.querySelector('.file-status');
-                fileStatus.innerHTML = '<span class="status status--error">✗ Error</span>';
-            }
-            throw error;
-        }
-    }
-
-    addFileUploadMessage(filename, status, errorMessage = null) {
-        if (!this.chatMessages) return;
-
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message file-upload-message';
-        messageDiv.dataset.filename = filename;
-
-        const now = new Date();
-        const timeString = now.toLocaleTimeString('en-US', {
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-
-        let content = '';
-        if (status === 'success') {
-            content = `
-                <div class="file-upload-content">
-                    <div class="file-upload-info">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                            <polyline points="14 2 14 8 20 8"></polyline>
-                        </svg>
-                        <span class="file-upload-name">${filename}</span>
-                        <span class="file-upload-status success">✓ Uploaded</span>
-                    </div>
-                    <button class="btn btn--sm btn--outline delete-uploaded-file" data-filename="${filename}">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6"></polyline>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
-                        Delete
-                    </button>
-                </div>
-            `;
-        } else {
-            content = `
-                <div class="file-upload-content">
-                    <div class="file-upload-info">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="8" x2="12" y2="12"></line>
-                            <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                        </svg>
-                        <span class="file-upload-name">${filename}</span>
-                        <span class="file-upload-status error">✗ Error</span>
-                    </div>
-                    <p class="error-message">${errorMessage || 'Upload failed'}</p>
-                </div>
-            `;
-        }
-
-        messageDiv.innerHTML = `
-            <div class="message-content">
-                ${content}
-            </div>
-            <div class="message-time">
-                ${timeString}
-            </div>
-        `;
-
-        this.chatMessages.appendChild(messageDiv);
-        this.scrollToBottom();
-
-        // Bind delete button event
-        if (status === 'success') {
-            const deleteBtn = messageDiv.querySelector('.delete-uploaded-file');
-            if (deleteBtn) {
-                deleteBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.deleteFileFromMessage(filename, messageDiv);
-                });
-            }
-        }
-    }
-
-    async deleteFileFromMessage(filename, messageElement) {
-        if (!confirm(`Delete file "${filename}" from server?`)) return;
-
-        try {
-            const response = await fetch(`${this.apiUrl}/api/documents/${filename}`, {
-                method: 'DELETE'
-            });
-
-            if (response.ok) {
-                // Remove from session files
-                this.uploadedFilesSession = this.uploadedFilesSession.filter(f => f.name !== filename);
-                
-                // Remove message from chat
-                if (messageElement && messageElement.parentNode) {
-                    messageElement.remove();
-                }
-                
-                // Add system message
-                this.addMessage('system', `File "${filename}" deleted successfully`, true);
-                
-                // Refresh file list
-                this.loadUploadedFiles();
-            } else {
-                this.addMessage('system', `Error deleting file "${filename}"`, true);
-            }
-        } catch (error) {
-            console.error('Error deleting file:', error);
-            this.addMessage('system', `Error deleting file "${filename}": ${error.message}`, true);
-        }
-    }
-
     async loadUploadedFiles() {
         try {
-            const response = await fetch(`${this.apiUrl}/api/documents`);
-            if (response.ok) {
-                const data = await response.json();
-                this.displayUploadedFiles(data.documents || []);
-            }
+            this.spinner.classList.remove('hidden');
+            
+            console.log(`📁 Loading files for session ${this.sessionId}...`);
+            
+            const response = await fetch(
+                `${this.apiUrl}/api/session/${this.sessionId}/documents`
+            );
+            
+            this.spinner.classList.add('hidden');
+            
+            if (!response.ok) throw new Error('❌ Failed to load files');
+            
+            const data = await response.json();
+            const files = data.documents || [];
+            
+            console.log(`📁 Loaded ${files.length} documents`);
+            this.displayUploadedFiles(files);
+            
         } catch (error) {
-            console.error('Error loading uploaded files:', error);
+            this.spinner.classList.add('hidden');
+            console.error('❌ Load files error:', error);
         }
     }
 
     displayUploadedFiles(files) {
         if (!this.uploadedFiles) return;
         
-        if (!files || files.length === 0) {
-            this.uploadedFiles.innerHTML = '<p class="no-files-text">No files uploaded</p>';
+        if (files.length === 0) {
+            this.uploadedFiles.innerHTML = '<p>⚠️ No files uploaded</p>';
             return;
         }
-
+        
         this.uploadedFiles.innerHTML = files.map(file => {
-            const isFromCurrentSession = this.uploadedFilesSession.some(f => f.name === file.filename);
-            const sessionBadge = isFromCurrentSession ? '<span class="session-badge">Current Session</span>' : '';
+            const isFromCurrentSession = this.uploadedFilesSession.some(f =>
+                f.name === file.filename
+            );
+            const sessionBadge = isFromCurrentSession ? '✓ Current' : 'Previous';
             
             return `
-                <div class="uploaded-file-item ${isFromCurrentSession ? 'session-file' : ''}">
-                    <div class="file-header">
-                        <span class="file-name">${file.filename}</span>
-                        ${sessionBadge}
-                    </div>
+                <div class="file-item">
                     <div class="file-details">
-                        <span class="file-size">${this.formatFileSize(file.size)}</span>
-                        <button class="btn btn--outline btn--sm delete-file" data-filename="${file.filename}">
-                            Delete
-                        </button>
+                        <span class="file-name">${file.filename || 'Unknown'}</span>
+                        <span class="file-info">${file.chunk_count || 0} chunks</span>
+                        <span class="file-badge">${sessionBadge}</span>
                     </div>
                 </div>
             `;
         }).join('');
-
-        this.uploadedFiles.querySelectorAll('.delete-file').forEach(button => {
-            button.addEventListener('click', (e) => {
-                this.deleteFile(e.target.dataset.filename);
-            });
-        });
     }
 
-    async deleteFile(filename) {
-        if (!confirm(`Delete file "${filename}"?`)) return;
-
+    async sendMessage() {
+        if (!this.sessionId) {
+            this.addMessage('system', '❌ Session not initialized', true);
+            return;
+        }
+        
+        const message = this.messageInput.value.trim();
+        if (!message) return;
+        
+        this.addMessage('user', message);
+        this.messageInput.value = '';
+        this.autoResizeTextarea();
+        
+        this.spinner.classList.remove('hidden');
+        
         try {
-            const response = await fetch(`${this.apiUrl}/api/documents/${filename}`, {
-                method: 'DELETE'
-            });
-
-            if (response.ok) {
-                this.addMessage('system', `File "${filename}" deleted`, true);
-                
-                this.uploadedFilesSession = this.uploadedFilesSession.filter(f => f.name !== filename);
-                
-                // Remove file upload message from chat
-                const fileMessages = this.chatMessages.querySelectorAll(`.file-upload-message[data-filename="${filename}"]`);
-                fileMessages.forEach(msg => msg.remove());
-                
-                this.loadUploadedFiles();
-            } else {
-                this.addMessage('system', `Error deleting file "${filename}"`, true);
+            console.log(`💬 Sending message in session ${this.sessionId}...`);
+            
+            const response = await fetch(
+                `${this.apiUrl}/api/session/${this.sessionId}/chat`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        use_rag: true,
+                        n_chunks: 5
+                    })
+                }
+            );
+            
+            this.spinner.classList.add('hidden');
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: Request failed`);
             }
+            
+            const data = await response.json();
+            
+            console.log('✅ Response received:', data);
+            
+            // Separate reasoning and answer
+            const { reasoning, answer } = this.separateReasoningAndAnswer(
+                data.response
+            );
+            
+            if (reasoning) {
+                this.addMessage('reasoning', reasoning);
+            }
+            
+            this.addMessage('assistant', answer);
+            
+            // Show S-GAS metadata
+            if (data.metadata) {
+                const meta = data.metadata;
+                const metaText = `
+📊 S-GAS Stats:
+  • Iteration: ${meta.iteration || '?'}
+  • Chunks used: ${meta.context_chunks_used || '?'}
+  • New chunks: ${meta.new_chunks_in_this_iteration || '?'}
+  • Total explored: ${meta.total_chunks_explored || '?'}
+  • Coverage: ${meta.coverage_percent?.toFixed(1) || '?'}%
+                `.trim();
+                
+                this.addMessage('system', metaText, true);
+            }
+            
         } catch (error) {
-            console.error('Error deleting file:', error);
-            this.addMessage('system', `Error deleting file "${filename}": ${error.message}`, true);
+            this.spinner.classList.add('hidden');
+            console.error('Send error:', error);
+            this.addMessage('system', `❌ Error: ${error.message}`, true);
         }
     }
 
-    formatFileSize(bytes) {
-        if (bytes === 0) return '0 B';
-        const k = 1024;
-        const sizes = ['B', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    async clearChat() {
+        if (!this.sessionId) {
+            this.addMessage('system', '❌ No session to clear', true);
+            return;
+        }
+        
+        if (!confirm('Are you sure? This will clear all chat and delete session data.')) {
+            return;
+        }
+        
+        try {
+            this.spinner.classList.remove('hidden');
+            
+            console.log(`🗑️  Clearing session ${this.sessionId}...`);
+            
+            // Delete request to clear session
+            const response = await fetch(
+                `${this.apiUrl}/api/session/${this.sessionId}/clear`,
+                { method: 'DELETE' }
+            );
+            
+            this.spinner.classList.add('hidden');
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: Clear failed`);
+            }
+            
+            // Clear UI
+            this.chatHistory = [];
+            this.uploadedFilesSession = [];
+            this.messageCount = 0;
+            
+            if (this.chatMessages) {
+                this.chatMessages.innerHTML = '';
+            }
+            
+            console.log('✅ Session cleared');
+            
+            // ✅ NEW: Reinitialize session
+            await this.initializeSession();
+            
+            this.addMessage('system', '✅ Chat cleared and session reset', true);
+            
+        } catch (error) {
+            this.spinner.classList.add('hidden');
+            console.error('Clear error:', error);
+            this.addMessage('system', `❌ Failed to clear: ${error.message}`, true);
+        }
     }
 
-    autoResizeTextarea() {
-        if (!this.messageInput) return;
-        this.messageInput.style.height = 'auto';
-        this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 200) + 'px';
+    exportChat() {
+        const chatData = {
+            sessionId: this.sessionId,
+            timestamp: new Date().toISOString(),
+            messages: this.chatHistory
+        };
+        
+        const dataStr = JSON.stringify(chatData, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        
+        link.href = url;
+        link.download = `sgas-chat-${Date.now()}.json`;
+        link.click();
+        
+        URL.revokeObjectURL(url);
+    }
+
+    addMessage(type, content, isSystem = false) {
+        this.messageCount++;
+        
+        const message = {
+            type,
+            content,
+            timestamp: new Date().toISOString()
+        };
+        
+        this.chatHistory.push(message);
+        
+        if (!this.chatMessages) return;
+        
+        const messageElement = document.createElement('div');
+        messageElement.className = `message ${type}-message ${isSystem ? 'system' : ''}`;
+        
+        const messageContent = document.createElement('div');
+        messageContent.className = 'message-content';
+        messageContent.textContent = content;
+        
+        messageElement.appendChild(messageContent);
+        this.chatMessages.appendChild(messageElement);
+        
+        // Scroll to bottom
+        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+        
+        if (this.messageCountElement) {
+            this.messageCountElement.textContent = this.messageCount;
+        }
+    }
+
+    addFileUploadMessage(filename, status, message) {
+        const content = `📄 ${filename}\n${message}`;
+        const type = status === 'success' ? 'file-upload' : 'system';
+        this.addMessage(type, content, true);
     }
 
     async checkServerStatus() {
         try {
-            const response = await fetch(`${this.apiUrl}/health`, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                this.updateStatus('online', `Server online • vLLM: ${data.vllm_status}`);
-                if (data.model && this.modelNameElement) {
-                    this.modelNameElement.textContent = data.model;
-                }
-            } else {
-                this.updateStatus('error', 'Server error');
+            const response = await fetch(`${this.apiUrl}/health`);
+            const data = await response.json();
+            
+            if (this.statusDot) {
+                this.statusDot.style.backgroundColor = 'rgb(34, 197, 94)';
             }
-        } catch (error) {
-            this.updateStatus('error', 'Server unavailable');
-            console.error('Error checking server status:', error);
-        }
-    }
-
-    updateStatus(status, message) {
-        if (this.statusDot) {
-            this.statusDot.className = `status-dot ${status}`;
-        }
-        if (this.statusText) {
-            this.statusText.textContent = message;
-        }
-    }
-
-    async sendMessage() {
-        if (!this.messageInput) return;
-        
-        const message = this.messageInput.value.trim();
-        if (!message) return;
-
-        const useRag = this.uploadedFilesSession.length > 0;
-
-        this.setLoading(true);
-        this.addMessage('user', message);
-
-        this.messageInput.value = '';
-        this.autoResizeTextarea();
-
-        const typingId = this.addTypingIndicator();
-
-        try {
-            const response = await fetch(`${this.apiUrl}/api/chat`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    message: message,
-                    use_rag: useRag
-                })
-            });
-
-            this.removeTypingIndicator(typingId);
-
-            if (response.ok) {
-                const data = await response.json();
-                
-                const { reasoning, answer } = this.separateReasoningAndAnswer(data.response);
-                
-                if (reasoning) {
-                    this.addMessage('reasoning', reasoning, false);
-                }
-                
-                this.addMessage('assistant', answer);
-                
-                this.updateMetadata(data.metadata);
-                this.updateRequestInfo(message, data);
-            } else {
-                const errorData = await response.json().catch(() => ({}));
-                this.addMessage('system', `Error: ${errorData.detail || 'Unknown server error'}`, true);
-            }
-        } catch (error) {
-            this.removeTypingIndicator(typingId);
-            this.addMessage('system', `Connection error: ${error.message}`, true);
-            console.error('Error sending message:', error);
-        }
-
-        this.setLoading(false);
-    }
-
-    addMessage(sender, content, isSystem = false) {
-        if (!this.chatMessages) return;
-        
-        if (sender === 'user' && this.messageCount === 0) {
-            this.removeWelcomeMessage();
-        }
-
-        const messageDiv = document.createElement('div');
-        
-        if (sender === 'reasoning') {
-            messageDiv.className = 'message reasoning-message';
-        } else if (isSystem) {
-            messageDiv.className = 'message system-message';
-        } else {
-            messageDiv.className = `message ${sender}`;
-        }
-
-        const now = new Date();
-        const timeString = now.toLocaleTimeString('en-US', {
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-
-        messageDiv.innerHTML = `
-            <div class="message-content">
-                ${this.formatMessage(content)}
-            </div>
-            <div class="message-time">
-                ${timeString}
-            </div>
-        `;
-
-        this.chatMessages.appendChild(messageDiv);
-        this.scrollToBottom();
-
-        if (!isSystem && sender !== 'reasoning') {
-            if (sender === 'user') {
-                this.messageCount++;
-                if (this.messageCountElement) {
-                    this.messageCountElement.textContent = this.messageCount;
-                }
+            if (this.statusText) {
+                this.statusText.textContent = '🟢 Connected';
             }
             
-            this.chatHistory.push({
-                sender,
-                content,
-                timestamp: now.toISOString(),
-                formatted_time: timeString
-            });
-        }
-    }
-
-    removeWelcomeMessage() {
-        if (!this.chatMessages) return;
-        const welcomeMessage = this.chatMessages.querySelector('.system-message');
-        if (welcomeMessage) {
-            setTimeout(() => {
-                if (welcomeMessage.parentNode) {
-                    welcomeMessage.remove();
-                }
-            }, 300);
-        }
-    }
-
-    formatMessage(content) {
-        return content
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            .replace(/`(.*?)`/g, '<code>$1</code>')
-            .replace(/\n/g, '<br>');
-    }
-
-    addTypingIndicator() {
-        if (!this.chatMessages) return null;
-        
-        const typingDiv = document.createElement('div');
-        typingDiv.className = 'message assistant';
-        const typingId = Date.now();
-        typingDiv.id = `typing-${typingId}`;
-        
-        typingDiv.innerHTML = `
-            <div class="message-content typing-content">
-                <div class="typing-indicator">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-            </div>
-        `;
-        
-        this.chatMessages.appendChild(typingDiv);
-        this.scrollToBottom();
-        return typingId;
-    }
-
-    removeTypingIndicator(typingId) {
-        if (!typingId) return;
-        const typingElement = document.getElementById(`typing-${typingId}`);
-        if (typingElement) {
-            typingElement.remove();
-        }
-    }
-
-    updateMetadata(metadata) {
-        if (metadata.embedding_shape && this.embeddingDimElement) {
-            const dimension = Array.isArray(metadata.embedding_shape)
-                ? metadata.embedding_shape[1] || metadata.embedding_shape[0]
-                : metadata.embedding_shape;
-            this.embeddingDimElement.textContent = dimension;
-        }
-        
-        if (metadata.model_used && this.modelNameElement) {
-            this.modelNameElement.textContent = metadata.model_used;
-        }
-    }
-
-    updateRequestInfo(query, response) {
-        if (!this.requestInfoElement) return;
-        
-        const info = `
-            <div class="request-detail">
-                <strong>Query:</strong> ${query.substring(0, 50)}${query.length > 50 ? '...' : ''}
-            </div>
-            <div class="request-detail">
-                <strong>RAG:</strong> ${response.metadata.use_rag ? 'Enabled' : 'Disabled'}
-            </div>
-            <div class="request-detail">
-                <strong>Chunks:</strong> ${response.metadata.context_chunks_used || 0}
-            </div>
-            <div class="request-detail">
-                <strong>Time:</strong> ${new Date(response.metadata.timestamp).toLocaleTimeString()}
-            </div>
-        `;
-        
-        this.requestInfoElement.innerHTML = info;
-    }
-
-    setLoading(loading) {
-        if (this.sendButton) {
-            this.sendButton.disabled = loading;
-            this.sendButton.textContent = loading ? 'Sending...' : 'Send';
-        }
-        if (this.uploadButton) {
-            this.uploadButton.disabled = loading;
-        }
-        if (this.spinner) {
-            if (loading) {
-                this.spinner.classList.remove('hidden');
-            } else {
-                this.spinner.classList.add('hidden');
+            if (this.modelNameElement && data.model_name) {
+                this.modelNameElement.textContent = data.model_name;
+            }
+            if (this.embeddingDimElement && data.embedding_dim) {
+                this.embeddingDimElement.textContent = data.embedding_dim;
+            }
+            
+        } catch (error) {
+            console.warn('Server status check failed:', error);
+            if (this.statusDot) {
+                this.statusDot.style.backgroundColor = 'rgb(239, 68, 68)';
+            }
+            if (this.statusText) {
+                this.statusText.textContent = '🔴 Disconnected';
             }
         }
     }
 
-    scrollToBottom() {
-        if (this.chatMessages) {
-            this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-        }
-    }
-
-    clearChat() {
-        if (!this.chatMessages) return;
+    autoResizeTextarea() {
+        if (!this.messageInput) return;
         
-        this.chatMessages.innerHTML = `
-            <div class="message system-message">
-                <div class="message-content">
-                    Welcome to S-GAS Manager! Send a message to start the conversation.
-                </div>
-            </div>
-        `;
-        
-        this.messageCount = 0;
-        if (this.messageCountElement) {
-            this.messageCountElement.textContent = '0';
-        }
-        if (this.requestInfoElement) {
-            this.requestInfoElement.innerHTML = 'No data';
-        }
-        
-        this.uploadedFilesSession = [];
-        this.chatHistory = [];
-        
-        console.log('Chat cleared');
-    }
-
-    exportChat() {
-        if (this.chatHistory.length === 0) {
-            alert('Chat history is empty');
-            return;
-        }
-
-        const exportData = {
-            export_date: new Date().toISOString(),
-            message_count: this.messageCount,
-            model: this.modelNameElement ? this.modelNameElement.textContent : '',
-            embedding_dimension: this.embeddingDimElement ? this.embeddingDimElement.textContent : '',
-            uploaded_files: this.uploadedFilesSession,
-            chat_history: this.chatHistory
-        };
-
-        const dataStr = JSON.stringify(exportData, null, 2);
-        const dataBlob = new Blob([dataStr], {type: 'application/json'});
-
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(dataBlob);
-        link.download = `sgas-chat-export-${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
-        console.log('Chat exported');
+        this.messageInput.style.height = 'auto';
+        this.messageInput.style.height = Math.min(
+            this.messageInput.scrollHeight,
+            200
+        ) + 'px';
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    window.sgasClient = new SGASWebClient();
-});
-
-window.addEventListener('error', (event) => {
-    console.error('Global error:', event.error);
-});
-
-setInterval(() => {
-    if (window.sgasClient) {
-        window.sgasClient.checkServerStatus();
-    }
-}, 30000);
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        new SGASWebClient();
+    });
+} else {
+    new SGASWebClient();
+}

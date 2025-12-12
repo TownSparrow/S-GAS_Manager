@@ -19,18 +19,24 @@ class EmbeddingManager:
     
     def _load_local_model(self):
         """ Loading local embedding model """
+        
         try:
             # Late import to avoid cyclical import
             if self.config is None:
                 from src.config import settings
                 model_name = settings['embeddings']['model']
-                self.local_model = SentenceTransformer(model_name)
-                logger.info(f"Local embedding model loaded: {model_name}")
+            else:
+                model_name = self.config.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
+
+            self.local_model = SentenceTransformer(model_name)
+            logger.info(f"✅ Local embedding model loaded: {model_name}")
+
         except Exception as e:
-            logger.warning(f"Failed to load local model: {e}", exc_info=True)
+            logger.warning(f"❌ Failed to load local model: {e}")
     
     async def get_embeddings_via_api(self, texts: List[str]) -> np.ndarray:
         """ Getting Embeddings via vLLM API """
+
         # Late import
         if self.config is None:
             from src.config import settings
@@ -40,6 +46,8 @@ class EmbeddingManager:
             api_url = self.config.get('vllm.api_base', 'http://localhost:8000/v1')
             model_name = self.config.get('embeddings.model', 'sentence-transformers/all-MiniLM-L6-v2')
         
+        logger.debug(f"Requesting embeddings from {api_url}")
+
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -49,37 +57,56 @@ class EmbeddingManager:
                         "input": texts
                     }
                 )
+
                 response.raise_for_status()
                 data = response.json()
-                return np.array([item["embedding"] for item in data["data"]])
+
+                embeddings = np.array([item["embedding"] for item in data["data"]])
+
+                logger.debug(f"✅ Got {len(embeddings)} embeddings from API")
+
+                return embeddings
+            
         except Exception as e:
-            logger.warning(f"API embeddings are not available: {e}")
+            logger.warning(f"⚠️ API embeddings are not available: {e}")
             raise
     
     def get_embeddings_local(self, texts: List[str]) -> np.ndarray:
         """ Getting Embeddings via Local Model """
+
         if self.local_model is None:
-            raise RuntimeError("Local embedding model not loaded")
+            raise RuntimeError("❌ Local embedding model not loaded")
         
+        logger.debug(f"Computing embeddings locally for {len(texts)} texts")
+
         embeddings = self.local_model.encode(texts, convert_to_numpy=True)
+        
         return embeddings
     
-    async def get_embeddings(self, texts: List[str]) -> np.ndarray:
+    def get_embeddings(self, texts: List[str]) -> np.ndarray:
         """ Getting Embeddings (API first, then local model) """
+
         if not texts:
             return np.array([])
         
         try:
-            return await self.get_embeddings_via_api(texts)
-        except Exception:
-            logger.info("Switching to a local embedding model")
-            return self.get_embeddings_local(texts)
+            logger.info(f"Getting embeddings for {len(texts)} texts (trying API)...")
+            return asyncio.run(self.get_embeddings_via_api(texts))
+        
+        except Exception as api_e:
+            logger.warning(f"⚠️ API failed, falling back to local: {api_e}")
+            try:
+                return self.get_embeddings_local(texts)
+            except Exception as local_e:
+                logger.error(f"❌ Both API and local embeddings failed: {local_e}")
+                raise RuntimeError(f"Cannot get embeddings: {local_e}")
 
 
 # Global instance
 embedding_manager = EmbeddingManager()
 
 
-async def get_embeddings(texts: List[str]) -> np.ndarray:
+def get_embeddings(texts: List[str]) -> np.ndarray:
     """ Wrapper function for getting embeddings """
-    return await embedding_manager.get_embeddings(texts)
+    
+    return embedding_manager.get_embeddings(texts)
