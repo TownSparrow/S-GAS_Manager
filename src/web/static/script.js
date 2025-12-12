@@ -1,7 +1,6 @@
 class SGASWebClient {
     constructor() {
-        //this.apiUrl = 'http://127.0.0.1:8080';
-        this.apiUrl = 'http://127.0.0.1:8000';
+        this.apiUrl = 'http://localhost:8080';
         this.sessionId = null;
         this.messageCount = 0;
         this.chatHistory = [];
@@ -20,7 +19,7 @@ class SGASWebClient {
         this.bindEvents();
         await this.initializeSession();
         this.checkServerStatus();
-        this.loadUploadedFiles();
+        await this.loadUploadedFiles();
         console.log('✅ S-GAS Web Client initialized successfully');
     }
 
@@ -41,7 +40,6 @@ class SGASWebClient {
             const data = await response.json();
             this.sessionId = data.session_id;
             
-            // Store in localStorage for persistence
             localStorage.setItem('sessionId', this.sessionId);
             
             console.log('✅ Session initialized:', this.sessionId);
@@ -54,6 +52,7 @@ class SGASWebClient {
     }
 
     initializeElements() {
+        // Message Elements
         this.messageForm = document.getElementById('messageForm');
         this.messageInput = document.getElementById('messageInput');
         this.sendButton = document.getElementById('sendButton');
@@ -229,6 +228,24 @@ class SGASWebClient {
         this.clearFileInput();
     }
 
+    displaySelectedFiles(files) {
+        if (!this.fileList) return;
+        
+        this.fileList.innerHTML = '';
+        this.fileList.classList.remove('hidden');
+        
+        files.forEach(file => {
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item';
+            fileItem.innerHTML = `
+                <span class="file-name">${file.name}</span>
+                <span class="file-size">${(file.size / 1024).toFixed(2)} KB</span>
+                <span class="file-status">⏳ Uploading...</span>
+            `;
+            this.fileList.appendChild(fileItem);
+        });
+    }
+
     async uploadFile(file) {
         try {
             const formData = new FormData();
@@ -249,8 +266,8 @@ class SGASWebClient {
 
             this.spinner.classList.add('hidden');
 
-            if (!responce.ok) {
-                throw new Error('❌ HTTP ${response.status}: Upload failed');
+            if (!response.ok) {
+                throw new Error(`❌ HTTP ${response.status}: Upload failed`);
             }
 
             const data = await response.json();
@@ -272,7 +289,7 @@ class SGASWebClient {
         } catch (error) {
             this.spinner.classList.add('hidden');
             console.error('❌ Upload error: ', error);
-            this.addFileUploadMessage(file.name, 'error', error_message);
+            this.addFileUploadMessage(file.name, 'error', error.message);
         }
 
     }

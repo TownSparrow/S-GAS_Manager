@@ -4,6 +4,8 @@ import numpy as np
 import logging
 from datetime import datetime, timezone
 
+from .retrieval_models import DocumentHeader, Chunk, ChunkMetadata
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,13 +25,14 @@ class SemanticChunker:
                  overlap_size: int = 50,
                  similarity_threshold: float = 0.7):
         """
-        Initialize SemanticChunker.
+        Initializing SemanticChunker.
         
         Args:
             max_chunk_size: Maximum chunk size (in words)
             overlap_size: Overlap size between chunks
             similarity_threshold: Semantic similarity threshold
         """
+
         self.max_chunk_size = max_chunk_size
         self.overlap_size = overlap_size
         self.similarity_threshold = similarity_threshold
@@ -56,10 +59,10 @@ class SemanticChunker:
 
     def initialize_document(self, 
                            text: str, 
-                           metadata: Dict[str, Any],
-                           session_id: str) -> List[Dict[str, Any]]:
+                           doc_header: DocumentHeader,
+                           session_id: str) -> List[Chunk]:
         """
-        Initialize document for session.
+        Initializing document for session.
         
         ⚠️ Warning: session_id is required
         
@@ -71,19 +74,19 @@ class SemanticChunker:
         Returns:
             List of chunks for this document
         """
+
         if not session_id:
             raise ValueError("⚠️ Warning: session_id is required!")
 
+        if not doc_header.document_uuid:
+            raise ValueError("⚠️ Warning: DocumentHeader must have document_uuid!")
+        
         logger.info(f"📄 Initializing document for session {session_id}...")
 
         # Create chunks
-        all_chunks = self._chunk_document(text, metadata)
+        all_chunks = self._chunk_document(text, doc_header, session_id)
 
-        # Add session_id to metadata of each chunk
-        for chunk in all_chunks:
-            chunk['metadata']['session_id'] = session_id
-
-        # Initialize session tracking if it doesn't exist
+        # Init session tracking if not initialized
         if session_id not in self.session_chunks_pool:
             self.session_chunks_pool[session_id] = []
             self.session_used_chunk_ids[session_id] = set()
@@ -98,15 +101,17 @@ class SemanticChunker:
 
     def _chunk_document(self, 
                        text: str, 
-                       metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+                       doc_header: DocumentHeader,
+                       session_id: str) -> List[Dict[str, Any]]:
         """
-        Divide document into semantic chunks.
+        Dividing document into semantic chunks.
         
         Process:
         1. Sentence segmentation
         2. Grouping sentences into chunks
-        3. Adding metadata without priorities
+        3. Creating chunk with correct ID
         """
+
         if not text or not text.strip():
             logger.warning("⚠️ Empty text provided")
             return []
@@ -122,29 +127,33 @@ class SemanticChunker:
         if not sentences:
             logger.warning("⚠️ Warning: No sentences found in text")
             return []
+        
+        logger.info(f"📊 Segmented into {len(sentences)} sentences")
 
         # Step 2: Group sentences into chunks
         chunks = []
         current_chunk = []
         current_size = 0
+        chunk_index = 0
 
         for sentence in sentences:
             sentence_size = len(sentence.split())
 
             if current_size + sentence_size > self.max_chunk_size and current_chunk:
+                # Chunks creation
                 chunk_text = " ".join(current_chunk)
-                chunk = {
-                    'id': f"{metadata.get('document_id', 'unknown')}_chunk_{len(chunks)}",
-                    'text': chunk_text,
-                    'metadata': {
-                        **metadata,
-                        'chunk_index': len(chunks),
-                        'chunk_size': len(chunk_text.split()),
-                        'timestamp': datetime.now(timezone.utc).isoformat(),
-                    }
-                }
-                chunks.append(chunk)
+                
+                chunk = Chunk.create(
+                    text=chunk_text,
+                    chunk_index=chunk_index,
+                    doc_header=doc_header,
+                    session_id=session_id
+                )
 
+                chunks.append(chunk)
+                chunk_index += 1
+
+                # Adding overlap for the next chunk
                 overlap_count = max(1, len(current_chunk) // 4)
                 current_chunk = current_chunk[-overlap_count:] + [sentence]
                 current_size = sum(len(s.split()) for s in current_chunk)
@@ -155,19 +164,18 @@ class SemanticChunker:
         # Add final chunk
         if current_chunk:
             chunk_text = " ".join(current_chunk)
-            chunk = {
-                'id': f"{metadata.get('document_id', 'unknown')}_chunk_{len(chunks)}",
-                'text': chunk_text,
-                'metadata': {
-                    **metadata,
-                    'chunk_index': len(chunks),
-                    'chunk_size': len(chunk_text.split()),
-                    'timestamp': datetime.now(timezone.utc).isoformat(),
-                }
-            }
+
+            chunk = Chunk.create(
+                text=chunk_text,
+                chunk_index=chunk_index,
+                doc_header=doc_header,
+                session_id=session_id
+            )
+
             chunks.append(chunk)
 
         logger.info(f"✅ Created {len(chunks)} chunks from document")
+        
         return chunks
 
     def mark_chunks_used(self, 
@@ -175,7 +183,7 @@ class SemanticChunker:
                         chunk_ids: List[str], 
                         iteration: int) -> None:
         """
-        Mark chunks as used in iteration.
+        Marking chunks as used in iteration.
         
         For S-GAS: each iteration excludes used chunks.
         
@@ -184,6 +192,7 @@ class SemanticChunker:
             chunk_ids: List of IDs of used chunks
             iteration: Number of iteration
         """
+
         if session_id not in self.session_used_chunk_ids:
             logger.warning(f"⚠️ Warning: Session {session_id} not initialized")
             return
@@ -199,7 +208,7 @@ class SemanticChunker:
 
     def get_excluded_chunk_ids(self, session_id: str) -> Set[str]:
         """
-        Get IDs of used chunks for exclusion from search.
+        Getting IDs of used chunks for exclusion from search.
         
         Args:
             session_id: ID of the session
@@ -207,13 +216,15 @@ class SemanticChunker:
         Returns:
             Set of chunk IDs to exclude
         """
+
         if session_id not in self.session_used_chunk_ids:
             return set()
+        
         return self.session_used_chunk_ids[session_id].copy()
 
-    def get_unused_chunks(self, session_id: str) -> List[Dict[str, Any]]:
+    def get_unused_chunks(self, session_id: str) -> List[Chunk]:
         """
-        Get chunks that haven't been used yet.
+        Getting chunks that haven't been used yet.
         
         Args:
             session_id: ID of the session
@@ -221,18 +232,21 @@ class SemanticChunker:
         Returns:
             List of unused chunks
         """
+
         if session_id not in self.session_chunks_pool:
             return []
 
+        excluded_ids = self.session_used_chunk_ids.get(session_id, set())
         unused = [
             chunk for chunk in self.session_chunks_pool[session_id]
-            if chunk['id'] not in self.session_used_chunk_ids.get(session_id, set())
+            if chunk.id not in excluded_ids
         ]
+
         return unused
 
     def get_statistics(self, session_id: str) -> Dict[str, Any]:
         """
-        Get statistics for session.
+        Getting statistics for session.
         
         Args:
             session_id: ID of the session
@@ -240,6 +254,7 @@ class SemanticChunker:
         Returns:
             Statistics of chunks, usage and coverage
         """
+
         if session_id not in self.session_chunks_pool:
             return {
                 'total_chunks_in_pool': 0,
@@ -266,7 +281,8 @@ class SemanticChunker:
         }
 
     def reset_session_tracking(self, session_id: str) -> None:
-        """Reset tracking for session."""
+        """Resetting tracking for session."""
+
         if session_id in self.session_used_chunk_ids:
             self.session_used_chunk_ids[session_id] = set()
         if session_id in self.session_usage_history:
@@ -278,6 +294,7 @@ class SemanticChunker:
 
     def clear_session(self, session_id: str) -> None:
         """Fully clear session."""
+
         if session_id in self.session_chunks_pool:
             del self.session_chunks_pool[session_id]
         if session_id in self.session_used_chunk_ids:
@@ -291,4 +308,5 @@ class SemanticChunker:
 
     def get_all_chunks(self, session_id: str) -> List[Dict[str, Any]]:
         """Get ALL chunks for session."""
+        
         return self.session_chunks_pool.get(session_id, []).copy()
