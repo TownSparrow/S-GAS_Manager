@@ -6,7 +6,6 @@ logger = logging.getLogger(__name__)
 
 
 class HybridScorer:
-    
     def __init__(self, alpha: float = 0.6, beta: float = 0.4):
 
         if not np.isclose(alpha + beta, 1.0):
@@ -25,9 +24,14 @@ class HybridScorer:
         chunk_embeddings: np.ndarray
     ) -> np.ndarray:
         
+        # Ensure inputs are numpy arrays
+        if not isinstance(query_embedding, np.ndarray):
+            query_embedding = np.array(query_embedding)
+        if not isinstance(chunk_embeddings, np.ndarray):
+            chunk_embeddings = np.array(chunk_embeddings)
+
         # Normalization of embeddings
         query_norm = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
-        
         chunk_norms = chunk_embeddings / (
             np.linalg.norm(chunk_embeddings, axis=1, keepdims=True) + 1e-8
         )
@@ -51,6 +55,9 @@ class HybridScorer:
         for chunk_id in chunk_ids:
             distance = graph_distances.get(chunk_id, max_distance)
             
+            # Ensure distance is float
+            distance = float(distance)
+
             # Converting distance into a score: score = 1 / (1 + distance)
             # The shorter the distance, the higher the score
             score = 1.0 / (1.0 + distance)
@@ -58,6 +65,29 @@ class HybridScorer:
         
         return np.array(graph_scores)
     
+    def _serialize_chunk_safe(self, chunk: Dict[str, Any]) -> Dict[str, Any]:
+        result = {}
+        for key, value in chunk.items():
+            if key == 'embedding':
+                continue
+
+            # Converting NumPy to Python native types
+            if isinstance(value, np.ndarray):
+                result[key] = value.tolist()
+            elif isinstance(value, (np.integer, np.floating)):
+                result[key] = value.item()
+            elif isinstance(value, dict):
+                result[key] = self._serialize_chunk_safe(value)
+            elif isinstance(value, (list, tuple)):
+                result[key] = [
+                    item.item() if isinstance(item, (np.integer, np.floating)) else item
+                    for item in value
+                ]
+            else:
+                result[key] = value
+        
+        return result
+
     def compute_hybrid_scores(
         self,
         query_embedding: np.ndarray,
@@ -71,38 +101,48 @@ class HybridScorer:
         
         # Calculating semantic scores
         semantic_scores = self.compute_semantic_scores(
-            query_embedding, 
+            query_embedding,
             chunk_embeddings
         )
         
         # Calculating graph estimates
         graph_scores = self.compute_graph_scores(
-            graph_distances, 
+            graph_distances,
             chunk_ids
         )
         
         # Calculating final hybrid scores for chunks
         hybrid_scores = self.alpha * semantic_scores + self.beta * graph_scores
         
+        # Convert numpy arrays to lists for safety
+        semantic_scores_list = semantic_scores.tolist() if isinstance(semantic_scores, np.ndarray) else semantic_scores
+        graph_scores_list = graph_scores.tolist() if isinstance(graph_scores, np.ndarray) else graph_scores
+        hybrid_scores_list = hybrid_scores.tolist() if isinstance(hybrid_scores, np.ndarray) else hybrid_scores
+
         # Forming a list (chunk, score)
         scored_chunks = []
         for i, chunk in enumerate(chunks):
+            chunk_serialized = self._serialize_chunk_safe(chunk)
+
             chunk_with_scores = {
-                **chunk,
-                'semantic_score': float(semantic_scores[i]),
-                'graph_score': float(graph_scores[i]),
-                'hybrid_score': float(hybrid_scores[i])
+                **chunk_serialized,
+                'semantic_score': float(semantic_scores_list[i]),
+                'graph_score': float(graph_scores_list[i]),
+                'hybrid_score': float(hybrid_scores_list[i])
             }
-            scored_chunks.append((chunk_with_scores, float(hybrid_scores[i])))
+            scored_chunks.append((chunk_with_scores, float(hybrid_scores_list[i])))
         
         # Sorting by descending hybrid rating
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
         
-        logger.info(
-            f"Hybrid scores for {len(scored_chunks)} chunks are calculated."
-            f"Top-1 score: {scored_chunks[0][1]:.4f}"
-        )
-        
+        if scored_chunks:
+            logger.info(
+                f"Hybrid scores for {len(scored_chunks)} chunks are calculated. "
+                f"Top-1 score: {scored_chunks[0][1]:.4f}"
+            )
+        else:
+            logger.info("No chunks scored")
+
         return scored_chunks
     
     def rerank_chunks(
@@ -123,11 +163,11 @@ class HybridScorer:
         # Return only chunks (without separate ratings)
         reranked = [chunk for chunk, score in scored_chunks]
         
-        if top_k is not None:
+        if top_k is not None and isinstance(top_k, int) and top_k > 0:
             reranked = reranked[:top_k]
-        
-        logger.info(f"Reranked {len(reranked)} chunks")
-        
+            logger.info(f"Reranked {len(reranked)} chunks (top_k={top_k})")
+        else:
+            logger.info(f"⚠️ No reranked chunks ")
         return reranked
     
     def get_score_statistics(
@@ -136,14 +176,14 @@ class HybridScorer:
     ) -> Dict[str, Any]:
         if not scored_chunks:
             return {}
-        
+
         scores = [score for _, score in scored_chunks]
         semantic_scores = [
-            chunk.get('semantic_score', 0.0) 
+            chunk.get('semantic_score', 0.0)
             for chunk, _ in scored_chunks
         ]
         graph_scores = [
-            chunk.get('graph_score', 0.0) 
+            chunk.get('graph_score', 0.0)
             for chunk, _ in scored_chunks
         ]
         

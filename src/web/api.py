@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, Set
+import numpy as np
 #from curses import meta, tparm
 #import imp
 
@@ -594,8 +595,7 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             # Computing how each chunk relates to query through graph structure
             graph_distances = graph_builder.compute_graph_distances(
                 query_text=request.message,
-                chunk_ids=chunk_ids,
-                graph=graph
+                chunk_ids=chunk_ids
             )
             
             logger.info(f"✅ Graph distances computed for {len(graph_distances)} chunks")
@@ -624,19 +624,43 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             hybrid_scorer = app.state.hybrid_scorer
             if hybrid_scorer is None:
                 raise ValueError("❌ Hybrid scorer not initialized")
-            
+
             # Ensure embeddings are available
-            if not chunk_embeddings:
+            chunk_embeddings_is_empty = (
+                chunk_embeddings is None or 
+                (isinstance(chunk_embeddings, list) and len(chunk_embeddings) == 0) or
+                (isinstance(chunk_embeddings, np.ndarray) and chunk_embeddings.size == 0)
+            )
+
+            if chunk_embeddings_is_empty:
+                logger.info("⚠️ chunk_embeddings is empty, getting embeddings...")
                 chunk_texts = [c.get('text', '') for c in context_chunks]
                 chunk_embeddings = get_embeddings(chunk_texts)
+                logger.info(f"✅ Got embeddings")
+            else:
+                logger.info("chunk_embeddings is not empty")
+
+            # Check type of chunk_embeddings
+            logger.info(f"Type of chunk_embeddings: {type(chunk_embeddings)}")
+            logger.info(f"Type of query_embedding_vec: {type(query_embedding_vec)}")
+
+            logger.info("Checking is chunk_embeddings an instance...")
+            if isinstance(chunk_embeddings, list):
+                chunk_embeddings = np.array(chunk_embeddings)
+        
+            logger.info("Checking is query_embedding an instance...")
+            if isinstance(query_embedding_vec, list):
+                query_embedding_vec = np.array(query_embedding_vec)
             
             # Handle empty graph_distances (use fallback)
             if not graph_distances:
                 logger.warning("⚠️ No graph distances, using fallback (all chunks equally distant)")
                 graph_distances = {
-                    c.get('id', f'chunk_{i}'): 1000.0
+                    c.get('id', f'chunk_{i}'): 0.5
                     for i, c in enumerate(context_chunks)
                 }
+
+            logger.info("Stage 2: Calling hybrid_scorer.rerank_chunks()...")
 
             # Reranking
             final_context = hybrid_scorer.rerank_chunks(
@@ -653,16 +677,31 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             if final_context:
                 for i, chunk in enumerate(final_context[:3]):
                     chunk_id = chunk.get('id', 'unknown')
-                    sim_score = chunk.get('similarity_score', chunk.get('similarity', 'N/A'))
-                    logger.info(f"   [{i+1}] {chunk_id}: score={sim_score}")
+                    hybrid_score = chunk.get('hybrid_score', 'N/A')
+                    semantic_score = chunk.get('semantic_score', 'N/A')
+                    graph_score = chunk.get('graph_score', 'N/A')
+        
+                    # Formating scores
+                    hybrid_str = f"{hybrid_score:.4f}" if isinstance(hybrid_score, float) else "N/A"
+                    semantic_str = f"{semantic_score:.4f}" if isinstance(semantic_score, float) else "N/A"
+                    graph_str = f"{graph_score:.4f}" if isinstance(graph_score, float) else "N/A"
+        
+                    logger.info(
+                        f"   [{i+1}] {chunk_id}: "
+                        f"hybrid={hybrid_str} "
+                        f"(semantic={semantic_str}, graph={graph_str})"
+                    )
 
         except Exception as e:
             logger.error(f"❌ Hybrid reranking failed: {e}")
+            import traceback
+            logger.error(f"Full Traceback:\n{traceback.format_exc()}")
             logger.warning("⚠️ Fallback: using original chunk order")
             final_context = context_chunks[:request.n_chunks]
 
     else:
         # No RAG or no chunks
+        logger.info("⚠️ Stage 2: Skipped (no RAG or empty context)")
         final_context = context_chunks[:request.n_chunks] if context_chunks else []
 
     # ════════════════════════════════════════════════════════════════════════════
@@ -870,23 +909,27 @@ async def list_session_documents(session_id: str):
         doc_processor = app.state.document_processor
         session_docs_metadata = doc_processor.get_session_documents(session_id)
         documents_data = session_docs_metadata.to_dict()
-        documents = documents_data.get('documents', [])
+
+        # Getting active documents
+        active_documents = documents_data.get('active_documents', [])
 
         # Converting
         result_documents = []
-        for doc_info in documents:
-            result_documents.append({
-                'filename': doc_info.get('document_name', 'unknown'),
-                'chunks': doc_info.get('chunks_count', 0),
-                'size': doc_info.get('total_size', 0),
-                'uuid': doc_info.get('document_uuid', ''),
-                'version': doc_info.get('version', 1)
-            })
+        for doc_info in active_documents:
+            if isinstance(doc_info, dict):
+                result_documents.append({
+                    'filename': doc_info.get('document_name', 'unknown'),
+                    'chunks': len(doc_info.get('chunks', [])),  # Count of chunks
+                    'size': doc_info.get('file_size', 0),
+                    'uuid': doc_info.get('document_uuid', ''),
+                    'version': doc_info.get('version', 1)
+                })
+            else:
+                logger.warning(f"⚠️ Skipping invalid document entry: {type(doc_info)} - {doc_info}")
 
         total_chunks = sum(d.get('chunks', 0) for d in result_documents)
-        
         logger.info(f"✅ Listed {len(result_documents)} documents for session {session_id}")
-    
+
         return {
             "session_id": session_id,
             "total_chunks": total_chunks,
