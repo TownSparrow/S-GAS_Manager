@@ -295,3 +295,48 @@ class ChromaVectorStore:
         logger.info(f"✅ Retrieved {len(chunks)} chunks for document {document_uuid}")
         
         return chunks
+    
+
+    async def get_all_session_chunks(self, session_id: str) -> List[Dict[str, Any]]:
+        """Getting all chunks from a session (no limit)"""
+        try:
+            where_filter = {"session_id": {"$eq": session_id}}
+            logger.info(f"Retrieving ALL chunks for session {session_id}...")
+        
+            results = self.collection.get(
+                where=where_filter,
+                include=['documents', 'metadatas', 'embeddings']
+            )
+        
+            if not results['ids']:
+                logger.warning(f"⚠️ No chunks found for session {session_id}")
+                return []
+        
+            chunks = []
+            for i in range(len(results['ids'])):
+                embedding = None
+                if results['embeddings'] is not None and len(results['embeddings']) > i:
+                    embedding = np.array(results['embeddings'][i])
+            
+                chunk = {
+                    'id': results['ids'][i],
+                    'text': results['documents'][i],
+                    'metadata': results['metadatas'][i],
+                    'embedding': embedding  # ← Сначала проверяем, потом присваиваем
+                }
+                chunks.append(chunk)
+        
+            logger.info(f"✅ Retrieved {len(chunks)} total chunks for session {session_id}")
+        
+            if chunks:
+                avg_text_size = sum(len(c['text']) for c in chunks) / len(chunks)
+                estimated_memory_mb = (len(chunks) * (384 * 4 + avg_text_size)) / (1024 * 1024)
+                logger.info(f"   Estimated memory: ~{estimated_memory_mb:.2f} MB")
+        
+            return chunks
+        
+        except Exception as e:
+            logger.error(f"❌ Failed to get all chunks: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
