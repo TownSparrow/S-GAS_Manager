@@ -157,8 +157,11 @@ async def lifespan(app: FastAPI):
             threshold=settings['swap']['threshold'],
             prefetch_count=settings['swap']['prefetch_count'],
             memory_check_interval_ms=settings['swap']['memory_check_interval'],
-            max_gpu_memory_tokens=settings['vllm']['max_model_len']
+            max_gpu_memory_tokens=settings['vllm']['max_model_len'],
+            debug_mode=settings['swap'].get('debug_mode', False),
+            force_offload_on_iteration=settings['swap'].get('force_offload_on_iteration', -1)
         )
+
         logger.info("✅ SwapManager initialized")
         
         # Store all components in app.state
@@ -264,14 +267,39 @@ class ChatResponse(BaseModel):
 # ============================================================================
 
 
-def build_prompt(context_chunks: List[Dict[str, Any]], user_message: str) -> str:
+def build_prompt(
+    context_chunks: List[Dict[str, Any]],
+    user_message: str,
+    max_context_tokens: Optional[int] = None,
+    enable_context_limit: Optional[bool] = None
+    ) -> str:
     """Build prompt with context"""
 
+    # Getting defaults from config if not provided
+    if enable_context_limit is None:
+        enable_context_limit = settings['prompt'].get('enable_context_limit', True)
+    if max_context_tokens is None:
+        max_context_tokens = settings['prompt'].get('max_context_tokens', 5000)
+
     if context_chunks:
-        context_text = "\n\n".join([
-            c.get("text") or c.get("document") or ""
-            for c in context_chunks if c
-        ])
+        context_text = ""
+        token_count = 0
+
+        for chunk in context_chunks:
+            chunk_text = chunk.get("text") or chunk.get("document") or ""
+            chunk_tokens = len(chunk_text) // 4
+
+            # Applying limit only if enabled
+            if enable_context_limit:
+                if token_count + chunk_tokens <= max_context_tokens:
+                    context_text += chunk_text + "\n\n"
+                    token_count += chunk_tokens
+                else:
+                    break
+            else:
+                # No limit: addding all chunks
+                context_text += chunk_text + "\n\n"
+
         return (
             f"Context from the knowledge base:\n{context_text}\n\n"
             f"User's request: {user_message}\n\n"
@@ -922,9 +950,10 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
         )
 
         # Decide swap action based on memory stats
-        swap_decision = swap_manager.decide_swap_action(
-            final_context,
-            current_context_tokens
+        swap_decision = app.state.swap_manager.decide_swap_action(
+            final_context, 
+            current_context_tokens,
+            iteration=iteration
         )
 
         # Execute swap
@@ -944,7 +973,12 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
     # STEP 7: LLM Inference with prepared context
     # ════════════════════════════════════════════════════════════════════════════
 
-    prompt = build_prompt(final_context, request.message)
+    prompt = build_prompt(
+        final_context, 
+        request.message,
+        max_context_tokens=settings['prompt'].get('max_context_tokens', 5000),
+        enable_context_limit=settings['prompt'].get('enable_context_limit', True)
+    )
     
     inference_start = time.time()
 

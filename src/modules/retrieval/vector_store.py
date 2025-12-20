@@ -322,7 +322,7 @@ class ChromaVectorStore:
                     'id': results['ids'][i],
                     'text': results['documents'][i],
                     'metadata': results['metadatas'][i],
-                    'embedding': embedding  # ← Сначала проверяем, потом присваиваем
+                    'embedding': embedding
                 }
                 chunks.append(chunk)
         

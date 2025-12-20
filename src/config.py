@@ -90,6 +90,10 @@ class Settings:
         self.API_PORT = self.settings['api']['port']
         self.CHROMA_PERSIST_DIR = self.settings['database']['chroma_persist_dir']
         self.COLLECTION_NAME = self.settings['database'].get('collection_name', 'documents')
+        self.PROMPT_ENABLE_CONTEXT_LIMIT = self.settings['prompt'].get('enable_context_limit', True)
+        self.PROMPT_MAX_CONTEXT_TOKENS = self.settings['prompt'].get('max_context_tokens', 3000)
+        self.SWAP_DEBUG_MODE = self.settings['swap'].get('debug_mode', False)
+        self.SWAP_FORCE_OFFLOAD_ON_ITERATION = self.settings['swap'].get('force_offload_on_iteration', -1)
         self.vllm_config = VLLMConfig(
             gpu_memory_utilization=self.settings['vllm']['gpu_memory_utilization'],
             max_model_len=self.settings['vllm']['max_model_len'],

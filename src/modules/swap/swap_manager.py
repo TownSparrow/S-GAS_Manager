@@ -33,7 +33,9 @@ class SwapManager:
         prefetch_count: int = 5,
         memory_check_interval_ms: int = 50,
         max_gpu_memory_tokens: Optional[int] = None,
-        device: str = "cuda:0" if torch.cuda.is_available() else "cpu"
+        device: str = "cuda:0" if torch.cuda.is_available() else "cpu",
+        debug_mode: bool = False,
+        force_offload_on_iteration: int = -1
     ):
         """
         Initialize SwapManager with GPU/CPU orchestration.
@@ -45,6 +47,7 @@ class SwapManager:
             max_gpu_memory_tokens: maximum tokens allowed in GPU VRAM
             device: CUDA device to use (e.g., "cuda:0")
         """
+
         self.device = torch.device(device) if isinstance(device, str) else device
         self.threshold = threshold
         self.prefetch_count = prefetch_count
@@ -83,6 +86,10 @@ class SwapManager:
         
         # Track GPU residency timing (for prefetch optimization, NOT deletion)
         self.gpu_access_time: Dict[str, float] = {}
+
+        self.debug_mode = debug_mode
+        self.force_offload_on_iteration = force_offload_on_iteration
+        self.current_iteration = 0
         
         logger.info("SwapManager initialized with permanent CPU RAM archive")
     
@@ -335,7 +342,8 @@ class SwapManager:
     def decide_swap_action(
         self,
         context_chunks: List[Dict[str, Any]],
-        current_context_tokens: int
+        current_context_tokens: int,
+        iteration: int = 0
     ) -> Dict[str, Any]:
         """
         Decide GPU memory optimization strategy based on performance metrics.
@@ -352,10 +360,37 @@ class SwapManager:
         Returns:
             Decision dict with 'action' (load/offload/none) and 'chunk_ids'
         """
+
         # No GPU = no swapping
         if "cuda" not in str(self.device):
             return {'action': 'none', 'chunk_ids': []}
         
+        # =====================================================
+        # DEBUG MODE:
+        # =====================================================
+
+        if self.debug_mode:
+            # Mode 1: Force offload on specific iteration
+            if self.force_offload_on_iteration >= 0 and iteration == self.force_offload_on_iteration:
+                logger.warning(f"🔴 DEBUG MODE: Force offload on iteration {iteration}")
+                outdated = [c for c in self.gpu_chunks.keys() if c not in [ch.get('id') for ch in context_chunks]]
+                if outdated:
+                    logger.info(f"OFFLOADING {len(outdated)} chunks for testing")
+                    return {'action': 'offload', 'chunk_ids': outdated[:5]}
+        
+            # Mode 2: Always check for outdated chunks
+            current_ids = set(c.get('id') for c in context_chunks if c.get('id'))
+            gpu_ids = set(self.gpu_chunks.keys())
+            outdated_chunks = gpu_ids - current_ids
+        
+            if outdated_chunks:
+                logger.warning(f"🔴 DEBUG MODE: Found {len(outdated_chunks)} outdated chunks")
+                return {'action': 'offload', 'chunk_ids': list(outdated_chunks)[:5]}
+
+        # ════════════════════════════════════════════════════════════════
+        # NORMAL MODE: Intelligent swap decisions
+        # ════════════════════════════════════════════════════════════════
+
         try:
             gpu_utilization = torch.cuda.utilization(self.device)
             gpu_allocated = torch.cuda.memory_allocated(self.device)
@@ -422,6 +457,108 @@ class SwapManager:
         
         # No action needed
         return {'action': 'none', 'chunk_ids': []}
+
+    # =====================================================
+    # SWAP DECISION ALGORITHM (WITH LIMITER)
+    # =====================================================
+
+    # def decide_swap_action(
+    #     self,
+    #     context_chunks: List[Dict[str, Any]],
+    #     current_context_tokens: int
+    # ) -> Dict[str, Any]:
+    #     """
+    #     Decide GPU memory optimization strategy based on performance metrics.
+    #     """
+    #     # No GPU = no swapping
+    #     if "cuda" not in str(self.device):
+    #         return {'action': 'none', 'chunk_ids': []}
+
+    #     try:
+    #         gpu_utilization = torch.cuda.utilization(self.device)
+    #         gpu_allocated = torch.cuda.memory_allocated(self.device)
+    #         gpu_mb = gpu_allocated / 1024 / 1024
+    #     except Exception as e:
+    #         logger.warning(f"❌ Failed to get GPU stats: {e}")
+    #         gpu_utilization = 0
+    #         gpu_mb = 0
+
+    #     free_memory_mb = self._get_free_gpu_memory_mb()
+    #     needed_memory_mb = current_context_tokens * 4 / 1024
+
+    
+    #     current_chunk_ids = set(c.get('id') for c in context_chunks if c.get('id'))
+    #     gpu_chunk_ids = set(self.gpu_chunks.keys())
+    
+    #     # Chunks that are in GPU but NOT in current context → OFFLOAD them!
+    #     outdated_chunks = gpu_chunk_ids - current_chunk_ids
+    
+    #     if len(outdated_chunks) > 0:
+    #         logger.warning(f"⚠️ OFFLOAD DECISION: {len(outdated_chunks)} chunks in GPU are not needed")
+    #         logger.info(f"   Outdated chunks: {list(outdated_chunks)[:5]}")
+        
+    #         # Force offload
+    #         for chunk_id in list(outdated_chunks)[:3]:  # Offload top 3
+    #             logger.info(f"   Scheduling OFFLOAD: {chunk_id}")
+        
+    #         return {'action': 'offload', 'chunk_ids': list(outdated_chunks)[:5]}
+
+    #     # Decision 1: If GPU memory very LOW, unload oldest chunks to RAM
+    #     if free_memory_mb < needed_memory_mb * 0.2:
+    #         logger.warning(f"⚠️ LOW GPU memory ({free_memory_mb:.1f} MB), offloading LRU chunks")
+
+    #         candidates = [
+    #             cid for cid in self.gpu_chunks.keys()
+    #             if cid not in [c.get('id') for c in context_chunks]
+    #         ]
+
+    #         if candidates:
+    #             lru_chunks = sorted(
+    #                 candidates,
+    #                 key=lambda x: self.gpu_access_time.get(x, 0)
+    #             )[:3]
+
+    #             logger.info(f"Will offload {len(lru_chunks)} LRU chunks: {lru_chunks}")
+    #             return {'action': 'offload', 'chunk_ids': lru_chunks}
+
+    #     # Decision 2: If GPU memory plenty, LOAD current chunks for acceleration
+    #     if free_memory_mb > needed_memory_mb * 2:
+    #         chunk_ids = [
+    #             c.get('id') for c in context_chunks
+    #             if c.get('id') and c.get('id') not in self.gpu_chunks
+    #         ]
+
+    #         if chunk_ids:
+    #             logger.info(f"✅ Plenty of GPU memory, preloading {len(chunk_ids)} chunks")
+    #             return {'action': 'load', 'chunk_ids': chunk_ids}
+
+    #     # Analyze performance history
+    #     avg_compute_time = (
+    #         sum(self.t_comp_history) / len(self.t_comp_history)
+    #         if self.t_comp_history else 1.0
+    #     )
+
+    #     avg_swap_time = (
+    #         sum(self.t_swap_history) / len(self.t_swap_history)
+    #         if self.t_swap_history else 0.001
+    #     )
+
+    #     # Calculate swap overhead ratio
+    #     if avg_compute_time > 0:
+    #         swap_ratio = avg_swap_time / avg_compute_time
+    #     else:
+    #         swap_ratio = 0
+
+    #     # If swapping is too slow, don't do it
+    #     if swap_ratio > self.threshold:
+    #         logger.debug(
+    #             f"Swap overhead {swap_ratio:.4f} exceeds threshold {self.threshold}"
+    #         )
+
+    #         return {'action': 'none', 'chunk_ids': []}
+
+    #     # No action needed
+    #     return {'action': 'none', 'chunk_ids': []}
     
     def execute_swap_decision(self, decision: Dict[str, Any]) -> None:
         """
