@@ -1,4 +1,5 @@
 # Semantic-Graph Adaptive Swapping Manager (S-GAS Manager)
+[RU Version of README](https://github.com/TownSparrow/S-GAS_Manager/blob/main/README_ru.md)
 
 ## ⚠️ WARNING! ⚠️
 Current version is `v0.1.0-alpha.1`. Project is in development process! I don't recommend to use it in production-tasks yet!
