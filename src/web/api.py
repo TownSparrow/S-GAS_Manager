@@ -114,7 +114,7 @@ async def get_all_session_chunks(session_id: str) -> List[Dict[str, Any]]:
 async def lifespan(app: FastAPI):
     """Initialize services at startup"""
 
-    logger.info("🚀 Starting S-GAS Manager API initialization...")
+    logger.info("Starting S-GAS Manager API initialization...")
     
     try:
         # Initialize vector store
@@ -198,7 +198,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="S-GAS Manager API",
     description="Semantic-Graph Adaptive Swapping (S-GAS) for Small Language Models",
-    version="0.1.7",
+    version="v0.1.0-alpha.1",
     lifespan=lifespan,
 )
 
@@ -380,7 +380,7 @@ async def serve_web_client():
     return JSONResponse(
         {
             "message": "S-GAS Manager API",
-            "version": "0.1.6",
+            "version": "v0.1.0-alpha.1",
             "endpoints": [
                 "/api/session/new",
                 "/api/session/{session_id}/upload-document",
@@ -417,7 +417,7 @@ async def health_check():
         "model": settings['vllm']['model_name'],
         "active_sessions": len(app.state.sessions),
         "time": datetime.now(timezone.utc).isoformat(),
-        "api_version": "1.6",
+        "api_version": "v0.1.0-alpha.1",
     }
 
 

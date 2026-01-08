@@ -34,8 +34,8 @@ async def test_embeddings():
         embeddings = await get_embeddings(test_texts)
         
         logger.info(f"✅ Embeddings were received!")
-        logger.info(f"📊 Dimension: {embeddings.shape}")
-        logger.info(f"📝 Texts processed: {len(test_texts)}")
+        logger.info(f"Dimension: {embeddings.shape}")
+        logger.info(f"Texts processed: {len(test_texts)}")
         
         return embeddings
         
@@ -47,7 +47,7 @@ async def test_embeddings():
 async def test_configuration():
     """ Checking the correctness of the configuration """
     try:
-        logger.info("🔧 Checking configuration...")
+        logger.info("Checking configuration...")
         logger.info(f"vLLM model: {settings.VLLM_MODEL_NAME}")
         logger.info(f"vLLM API URL: {settings.VLLM_API_URL}")
         logger.info(f"Embedding model: {settings.EMBEDDING_MODEL_NAME}")
@@ -61,7 +61,7 @@ async def test_configuration():
 
 async def main():
     """ Basic function for testing components """
-    logger.info("🚀 Launching S-GAS Manager...")
+    logger.info("Launching S-GAS Manager...")
     
     # Checking the configuration
     if not await test_configuration():
@@ -81,7 +81,7 @@ async def main():
     # swap_manager = SwapManager()
     
     logger.info("✅ All basic components are tested!")
-    logger.info("🌐 To run the API use: uvicorn src.web.api:app --reload --host 0.0.0.0 --port 8080")
+    logger.info("To run the API use: uvicorn src.web.api:app --reload --host 0.0.0.0 --port 8080")
 
 if __name__ == "__main__":
     asyncio.run(main())

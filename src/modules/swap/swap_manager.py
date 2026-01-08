@@ -64,8 +64,8 @@ class SwapManager:
                 logger.info(f"Using GPU device: {torch.cuda.get_device_name(self.device)}")
         
         # Storage layers (philosophy: CPU RAM is permanent, GPU is temporary)
-        self.gpu_chunks: Dict[str, torch.Tensor] = {}      # Current working set in GPU VRAM
-        self.cpu_chunks: Dict[str, torch.Tensor] = {}      # Permanent archive in pinned RAM
+        self.gpu_chunks: Dict[str, torch.Tensor] = {}        # Current working set in GPU VRAM
+        self.cpu_chunks: Dict[str, torch.Tensor] = {}        # Permanent archive in pinned RAM
         self.chunk_metadata: Dict[str, Dict[str, Any]] = {}  # Metadata for all chunks
         
         # Prefetch strategy
