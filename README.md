@@ -1,217 +1,146 @@
-# S-GAS Manager
+# Semantic-Graph Adaptive Swapping Manager (S-GAS Manager)
+[RU Version of README](https://github.com/TownSparrow/S-GAS_Manager/blob/main/README_ru.md)
 
-Enables small language models (SLMs) with retrieval-augmented generation (RAG) to control massive contexts by adaptive swapping chunks between GPU and CPU memory. Applies semantic-graph relevance assessment before each query to dynamically manage information, allowing to go beyond VRAM on consumer hardware.
+## ⚠️ WARNING! ⚠️
+Current version is `v0.1.0-alpha.1`. Project is in development process! I don't recommend to use it in production-tasks yet!
 
-## Overview
+## About the project
+This project is a prototype system that applies an adaptive data distribution algorithm with semantic-graph scoring of text fragments (chunks) when working with small language models (SLM). It allows language models with Retrieval-Augmented Generation (RAG) capabilities to handle large contexts by adaptively swapping chunks between GPU memory and system RAM. The system applies a semantic-graph evaluation of the value of each text fragment before every request in order to dynamically manage information on consumer-grade hardware.
 
-S-GAS Manager is a research project that combines:
-- **Adaptive Swapping**: Dynamic memory management between GPU and CPU
-- **Semantic + Graph Relevance Assessment**: Hybrid chunk ranking using cosine similarity and graph distances
-- **RAG for Small Language Models**: Extending context windows for SLMs on consumer hardware
-- **Web-based Testing Interface**: Interactive chat client for comfortable testing
+The project and algorithm were developed by student Leonid Vorobyev as part of research work within the master’s program “Game Development Technologies” at the Game Development School of ITMO University.
 
-## Project Architecture
+### Scientific problem
+Small language models are limited by a fixed context window, which creates critical issues in:
+- multi-turn dialogues, where the model loses early context and generates contradictory answers;
+- RAG systems, where naive accumulation of chunks leads to GPU memory overflow;
+- working with long documents, where the model loses information in the middle of the context.
 
-```
-S-GAS_MANAGER/
-├── src/
-│   ├── core/                    # Core algorithm modules
-│   ├── modules/
-│   │   ├── retrieval/           # Embedding and retrieval logic
-│   │   ├── graph/               # Knowledge graph construction
-│   │   └── swap/                # Memory swap management
-│   ├── web/
-│   │   ├── api.py               # FastAPI REST endpoints
-│   │   └── static/              # Web client files
-│   │       ├── index.html       # Main interface
-│   │       ├── styles.css       # UI styling
-│   │       └── script.js        # Client-side logic
-│   ├── config.py                # Configuration management
-│   └── main.py                  # Main testing script
-├── configs/
-│   ├── models.json              # Model configurations
-│   └── system_params.json       # System parameters
-├── scripts/
-│   ├── install_env.sh           # Environment setup
-│   └── start_vllm_server.sh     # vLLM server launcher
-├── other/
-│   └── requirements.txt         # Python dependencies
-└── data/                        # Data storage (created automatically)
-```
+### Key components of the algorithm
+The algorithm consists of three main mechanisms:
+1. Semantic similarity between embeddings of the query and candidate fragments  
+2. Graph-based scoring through analysis of entities and their relations in a knowledge graph  
+3. Dynamic movement of fragments between VRAM and RAM based on the resulting scores  
 
-## How to Set Up and Launch
+### Core technologies
+| Component         | Technology             |
+|------------------|------------------------|
+| Inference engine | vLLM (PagedAttention)  |
+| Embeddings       | Sentence-Transformers  |
+| Vector store     | ChromaDB (HNSW)        |
+| Knowledge graph  | NetworkX + spaCy       |
+| API              | FastAPI + Uvicorn      |
+| Memory management| PyTorch + CUDA         |
 
-### 1. Prepare the Environment and Install Dependencies
+### Target outcomes
+1. Reduce VRAM consumption by 15–20% while preserving system quality  
+2. Improve Recall@K by 5–10% in multi-turn dialogue scenarios  
+3. Maintain interactive latency (<200 ms per token)  
+4. Enable operation with context sizes at least 2× larger than the physical GPU memory capacity  
 
-**a) Prerequisites:**
-- Python 3.10+ installed (Python 3.12 recommended)
-- NVIDIA GPU with CUDA support (for optimal performance)
-- At least 16GB system RAM and 12GB VRAM
+## Quick start
 
-**b) Use the setup script to create and configure the Python virtual environment:**
+### Requirements
+- **OS**: Ubuntu 22.04 LTS (or any other Linux distribution supported by vLLM)  
+- **GPU**: NVIDIA GPU with CUDA support (12GB+ VRAM recommended)  
+- **CPU**: At least 8 cores  
+- **RAM**: 16GB+  
+- **Python**: 3.10+  
+
+### System installation
+To install the system, download the latest version of the repository, go to the project root directory and run the installation script:
 ```bash
 chmod +x ./scripts/install_env.sh
 ./scripts/install_env.sh
 ```
 
-This script will:
-- Create a virtual environment (`S-GAS_Manager_env`)
-- Activate it automatically
-- Upgrade pip and essential tools
-- Install all Python dependencies from `other/requirements.txt`
-- Download the Russian spaCy model for entity extraction
-
-**c) Manually activate the environment when needed:**
-```bash
-source S-GAS_Manager_env/bin/activate
-```
-
-### 2. Verify and Adjust Configuration
-
-Check the main configuration file:
-```
-configs/system_params.json
-```
-
-Key settings to verify:
-- `vllm.model_name`: Path or HuggingFace model name
-- `vllm.gpu_memory_utilization`: GPU memory usage (0.8 = 80%)
-- `vllm.max_model_len`: Maximum context length
-- `embeddings.model`: Embedding model for semantic analysis
-
-### 3. Prepare Static Files for the Web Client
-
-Ensure the following files are in `src/web/static/`:
-- `index.html` (main web interface)
-- `styles.css` (styling and animations)
-- `script.js` (client-side chat logic)
-
-Expected directory structure:
-```
-src/web/static/
- ├── index.html
- ├── styles.css
- └── script.js
-```
-
-### 4. Start the Language Model Server (vLLM)
-
-**Option A: Use the provided script:**
+### System launch
+1. Check the configuration file and adjust runtime parameters in `configs/system_params.json` if needed.
+2. In the project root directory, open a terminal and run the launch script:
 ```bash
 chmod +x ./scripts/start_vllm_server.sh
 ./scripts/start_vllm_server.sh
 ```
-
-**Option B: Manual launch:**
-```bash
-source S-GAS_Manager_env/bin/activate
-
-# Extract config values
-CONFIG_FILE="configs/system_params.json"
-VLLM_MODEL=$(python -c "import json;print(json.load(open('$CONFIG_FILE'))['vllm']['model_name'])")
-VLLM_GPU_MEM=$(python -c "import json;print(json.load(open('$CONFIG_FILE'))['vllm']['gpu_memory_utilization'])")
-VLLM_MAX_LEN=$(python -c "import json;print(json.load(open('$CONFIG_FILE'))['vllm']['max_model_len'])")
-
-# Start vLLM server
-vllm serve $VLLM_MODEL \
-    --gpu-memory-utilization $VLLM_GPU_MEM \
-    --max-model-len $VLLM_MAX_LEN \
-    --max-num-seqs 32 \
-    --host 0.0.0.0 \
-    --port 8000
-```
-
-> **Important:** Keep this server running in a separate terminal. The API server depends on it.
-
-### 5. Start the Main API Server (FastAPI/Uvicorn)
-
-In another terminal, from the project root:
+3. Wait for the system to start successfully.
+4. In the project root directory, open an additional terminal (without closing the previous one) and start the local API server:
 ```bash
 source S-GAS_Manager_env/bin/activate
 uvicorn src.web.api:app --reload --host 0.0.0.0 --port 8080
 ```
+5. After the API is successfully started, open the system page in your browser: **http://localhost:8080**
 
-This launches:
-- REST API endpoints at `/api/chat`, `/health`
-- Static file server for the web client
-- Automatic reload on code changes (development mode)
+## How to use the systen
 
-### 6. Access the Web Client
+### Via web UI
+1. To create a request, use the message input form. After entering your text, click the corresponding button to send it.
+2. RAG mode is automatically enabled when documents are used. A dedicated button is provided for document upload. Successful upload and processing of a document is indicated by a corresponding message in the chat.
+3. When the chat page is opened, a session with a unique ID is created. This ID is required to access the statistics page for a specific session.
 
-Open your browser and navigate to: **[http://localhost:8080](http://localhost:8080)**
+### Main endpoints for system inspection
+- `/api/session/{session_id}/info` - information about the current session
+- `/api/session/{session_id}/documents` - information about documents used in the system
+- `/api/sgas-statistics` - overall state of the algorithm and system
 
-**Web Client Features:**
-- 🎨 Modern chat interface with animations
-- 📊 Real-time status monitoring (server health, model info)
-- 🔧 RAG toggle (enable/disable retrieval-augmented generation)
-- 📈 Session statistics (message count, embedding dimensions)
-- 💾 Export chat history to JSON
-- 🧹 Clear chat functionality
-- ⌨️ Keyboard shortcuts (Ctrl+Enter to send)
+### How to inspect and collect system logs
+1. Use the corresponding endpoints to view system usage statistics.
+2. The main log file with system state is stored in the  `logs`. The default file name is `session_metrics.jsonl`
+3. During system operation, service messages are also printed to the terminal.
 
-### 7. Testing & Diagnostics
 
-**Successful setup indicators:**
-- Green status dot: "Server online • vLLM: healthy"
-- Model name displayed in the info panel
-- Embedding dimensions shown after first query
+### Possible issues and their solutions
+| Issue | Soluation |
+|----------|---------|
+| vLLM does not start | Check CUDA support: `nvidia-smi` |
+| API does not respond | Make sure vLLM is using the correct port (8000) |
+| GPU out-of-memory | Decreese `gpu_memory_utilization` in `configs/system_params.json` |
+| Graph is not built | Ensure the correct version of spaCy model is installed: `python -m spacy download ru_core_news_sm` (for Russian) |
 
-**Troubleshooting:**
-- **Red status dot**: Check vLLM server is running on port 8000
-- **No response**: Check terminal logs for both servers
-- **JavaScript errors**: Open browser console (F12) for client-side issues
-- **API errors**: Check FastAPI logs in the terminal
-
-**Health check endpoints:**
-- API status: `GET http://localhost:8080/health`
-- vLLM models: `GET http://localhost:8000/v1/models`
-
-### 8. Development and Testing
-
-**Run basic component tests:**
-```bash
-source S-GAS_Manager_env/bin/activate
-python src/main.py
+## Architecture of system
 ```
+S-GAS_MANAGER/
+├── src/
+│   ├── core/
+│   │   └── scoring.py                # Core: semantic-graph scoring of text fragments
+│   ├── modules/
+│   │   ├── retrieval/
+│   │   │   ├── chunking.py           # Splitting text into semantic chunks
+│   │   │   ├── document_loader.py    # Document loading and initialization
+│   │   │   ├── document_processor.py # Preprocessing of text
+│   │   │   ├── embedder.py           # Converting text into embeddings
+│   │   │   ├── vector_store.py       # Interaction with ChromaDB
+│   │   │   └── retrieval_models.py   # Data models for RAG modules
+│   │   ├── graph/
+│   │   │   └── graph_builder.py      # Knowledge graph construction and entity extraction
+│   │   └── swap/
+│   │       └── swap_manager.py       # Data swapping manager 
+│   ├── web/
+│   │   ├── api.py                    # FastAPI REST endpoints
+│   │   └── static/
+│   │       ├── index.html            # Main web client page
+│   │       ├── styles.css            # Web client styles
+│   │       └── script.js             # Web client logic
+│   ├── config.py                     # Configuration deserialization
+│   └── main.py                       # Test script for startup validation
+├── configs/
+│   └── system_params.json            # System runtime parameters (model, GPU mem, batch size, etc.)
+├── scripts/
+│   ├── install_env.sh                # Automatic dependency installation
+│   └── start_vllm_server.sh          # vLLM server startup
+├── logs/
+│   └── session_metrics.jsonl         # Per-session metrics logging
+├── other/
+│   ├── requirements.txt              # Main dependencies
+│   └── requirements_dev.txt          # Development dependencies
+└── data/                             # Document and embedding storage (created automatically)
 
-This will test:
-- Configuration loading
-- Embedding generation
-- Basic system connectivity
-
-**API testing with curl:**
-```bash
-curl -X POST http://localhost:8080/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello, how are you?", "use_rag": true}'
 ```
-
-### 9. Stopping the Servers
-
-1. Press `Ctrl+C` in each terminal running servers
-2. Deactivate the virtual environment:
-```bash
-deactivate
-```
-
-## Research Goals
-
-This project implements and tests the S-GAS algorithm for:
-- Reducing swap operations by 30-50% compared to existing algorithms
-- Improving retrieval relevance using semantic + graph ranking
-- Maintaining latency within 1.1-1.3x of baseline performance
-- Enabling context windows up to 200K tokens on consumer hardware
 
 ## Contributing
+This is a research prototype and is under active development. If you encounter any issues:
+1. Check the logs for detailed error information.
+2. Verify that all configuration files are correct.
+3. Make sure both servers are running correctly.
+4. Test with different model configurations.
 
-This is a research prototype. For issues or suggestions:
-1. Check logs for error details
-2. Verify all configuration files
-3. Ensure both servers are running correctly
-4. Test with different model configurations
+Any feedback or reports about discovered issues are highly appreciated. Your support helps the project evolve!
 
----
-
-**Ready to test your S-GAS Manager! 🚀**
-
-The web interface makes it easy to experiment with different queries, monitor system performance, and evaluate the adaptive swapping algorithm in real-time.
+[🔗 Author's Telegram](https://t.me/TownSparrow)

@@ -1,8 +1,8 @@
 {
   "vllm": {
     "model_name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
-    "gpu_memory_utilization": 0.75,
-    "max_model_len": 8192,
+    "gpu_memory_utilization": 0.4,
+    "max_model_len": 4096,
     "quantization": "awq_marlin",
     "dtype": "auto",
     "trust_remote_code": true,
@@ -16,7 +16,7 @@
     "similarity_metric": "cosine"
   },
   "rag": {
-    "top_k": 5
+    "top_k": 12
   },
   "chunking": {
     "max_chunk_size": 512,
@@ -34,14 +34,14 @@
     "spacy_model": "ru_core_news_md"
   },
   "prompt": {
-    "enable_context_limit": false,
-    "max_context_tokens": 5000
+    "enable_context_limit": true,
+    "max_context_tokens": 3000
   },
   "swap": {
-    "threshold": 0.3,
-    "prefetch_count": 5,
-    "memory_check_interval": 100,
-    "debug_mode": false,
+    "threshold": 2.0,
+    "prefetch_count": 8,
+    "memory_check_interval": 50,
+    "debug_mode": true,
     "force_offload_on_iteration": -1
   },
   "retrieval": {

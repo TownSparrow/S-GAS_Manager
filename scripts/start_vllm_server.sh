@@ -1,6 +1,6 @@
 set -euo pipefail
 
-echo "🚀 Launching the vLLM server for S-GAS Manager..."
+echo "Launching the vLLM server for S-GAS Manager..."
 
 if [ ! -d "S-GAS_Manager_env" ]; then
     echo "❌ Virtual environment is not created. Create and set params with install_env.sh"

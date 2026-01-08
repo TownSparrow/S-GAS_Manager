@@ -23,7 +23,7 @@ class PDFLoader(DocumentLoader):
             with open(file_path, 'rb') as f:
                 pdf_reader = PyPDF2.PdfReader(f)
                 
-                logger.info(f"📄 Loading PDF with {len(pdf_reader.pages)} pages")
+                logger.info(f"Loading PDF with {len(pdf_reader.pages)} pages")
                 
                 for page_num, page in enumerate(pdf_reader.pages):
                     try:

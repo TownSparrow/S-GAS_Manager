@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, Set
+
 #from curses import meta, tparm
 #import imp
 
@@ -12,6 +13,10 @@ from typing import List, Optional, Dict, Any, Set
 #from socketserver import _RequestType
 #import stat
 
+import numpy as np
+import torch
+import torch.cuda
+import json
 import httpx
 import logging
 import shutil
@@ -57,12 +62,59 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
+# ============================================================================
+# Memory processing
+# ============================================================================
+
+def log_gpu_memory_detailed(stage: str, iteration: int):
+    """Log GPU memory state in detail for swap monitoring"""
+    if not torch.cuda.is_available():
+        logger.debug(f"[Iteration {iteration}] {stage}: CUDA not available, skipping")
+        return
+    
+    try:
+        gpu_allocated = torch.cuda.memory_allocated() / 1024 / 1024
+        gpu_reserved = torch.cuda.memory_reserved() / 1024 / 1024
+        gpu_total = torch.cuda.get_device_properties(0).total_memory / 1024 / 1024
+        gpu_free = gpu_total - gpu_allocated
+        gpu_max = torch.cuda.max_memory_allocated() / 1024 / 1024
+        
+        logger.info(f"""
+[Iteration {iteration}] {stage} GPU STATE:
+├─ Allocated: {gpu_allocated:.2f} MB / {gpu_total:.2f} MB ({gpu_allocated/gpu_total*100:.1f}%)
+├─ Reserved: {gpu_reserved:.2f} MB
+├─ Free: {gpu_free:.2f} MB
+└─ Peak: {gpu_max:.2f} MB""")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to log GPU memory: {e}")
+
+async def get_all_session_chunks(session_id: str) -> List[Dict[str, Any]]:
+    """Get all chunks from the session for GPU initialization"""
+    try:
+        all_chunks = await app.state.vector_store.get_all_session_chunks(session_id)
+
+        if not all_chunks:
+            logger.warning(f"⚠️ No chunks found for session {session_id}")
+            return []
+
+        estimated_memory = len(all_chunks) * (384 * 4 + 2000) / 1024 / 1024
+        logger.info(f"✅ Retrieved {len(all_chunks)} total chunks for CPU archive initialization")
+        logger.info(f"   Estimated archive size: ~{estimated_memory:.2f} MB")
+        
+        return all_chunks
+    
+    except Exception as e:
+        logger.error(f"❌ Failed to get all chunks: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return []
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services at startup"""
 
-    logger.info("🚀 Starting S-GAS Manager API initialization...")
+    logger.info("Starting S-GAS Manager API initialization...")
     
     try:
         # Initialize vector store
@@ -105,8 +157,11 @@ async def lifespan(app: FastAPI):
             threshold=settings['swap']['threshold'],
             prefetch_count=settings['swap']['prefetch_count'],
             memory_check_interval_ms=settings['swap']['memory_check_interval'],
-            max_gpu_memory_tokens=settings['vllm']['max_model_len']
+            max_gpu_memory_tokens=settings['vllm']['max_model_len'],
+            debug_mode=settings['swap'].get('debug_mode', False),
+            force_offload_on_iteration=settings['swap'].get('force_offload_on_iteration', -1)
         )
+
         logger.info("✅ SwapManager initialized")
         
         # Store all components in app.state
@@ -143,7 +198,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="S-GAS Manager API",
     description="Semantic-Graph Adaptive Swapping (S-GAS) for Small Language Models",
-    version="0.1.6",
+    version="v0.1.0-alpha.1",
     lifespan=lifespan,
 )
 
@@ -212,14 +267,39 @@ class ChatResponse(BaseModel):
 # ============================================================================
 
 
-def build_prompt(context_chunks: List[Dict[str, Any]], user_message: str) -> str:
+def build_prompt(
+    context_chunks: List[Dict[str, Any]],
+    user_message: str,
+    max_context_tokens: Optional[int] = None,
+    enable_context_limit: Optional[bool] = None
+    ) -> str:
     """Build prompt with context"""
 
+    # Getting defaults from config if not provided
+    if enable_context_limit is None:
+        enable_context_limit = settings['prompt'].get('enable_context_limit', True)
+    if max_context_tokens is None:
+        max_context_tokens = settings['prompt'].get('max_context_tokens', 5000)
+
     if context_chunks:
-        context_text = "\n\n".join([
-            c.get("text") or c.get("document") or ""
-            for c in context_chunks if c
-        ])
+        context_text = ""
+        token_count = 0
+
+        for chunk in context_chunks:
+            chunk_text = chunk.get("text") or chunk.get("document") or ""
+            chunk_tokens = len(chunk_text) // 4
+
+            # Applying limit only if enabled
+            if enable_context_limit:
+                if token_count + chunk_tokens <= max_context_tokens:
+                    context_text += chunk_text + "\n\n"
+                    token_count += chunk_tokens
+                else:
+                    break
+            else:
+                # No limit: addding all chunks
+                context_text += chunk_text + "\n\n"
+
         return (
             f"Context from the knowledge base:\n{context_text}\n\n"
             f"User's request: {user_message}\n\n"
@@ -300,7 +380,7 @@ async def serve_web_client():
     return JSONResponse(
         {
             "message": "S-GAS Manager API",
-            "version": "0.1.6",
+            "version": "v0.1.0-alpha.1",
             "endpoints": [
                 "/api/session/new",
                 "/api/session/{session_id}/upload-document",
@@ -337,7 +417,7 @@ async def health_check():
         "model": settings['vllm']['model_name'],
         "active_sessions": len(app.state.sessions),
         "time": datetime.now(timezone.utc).isoformat(),
-        "api_version": "1.6",
+        "api_version": "v0.1.0-alpha.1",
     }
 
 
@@ -352,6 +432,7 @@ async def create_new_session(request: SessionCreateRequest):
         'excluded_chunks': [],
         'created_at': datetime.now(timezone.utc).isoformat(),
         'user_id': request.user_id if hasattr(request, 'user_id') else None,
+        'swap_initialized': False,
     }
     
     logger.info(f"✅ Created new session: {session_id}")
@@ -489,8 +570,10 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
     1. Get excluded chunks from previous iterations (if not the first iteration)
     2. Search for NEW chunks excluding the old ones
     3. Graph analysis and Hybrid reranking
-    4. Memory swapping management
-    5. Mark used chunks for the next iteration
+    4. Swap manager initialization (only if first iteration)
+    5. Memory swapping management
+    6. Mark used chunks for the next iteration
+    7. LLM Inference
     """
     
     # ════════════════════════════════════════════════════════════════════════════
@@ -555,7 +638,7 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
                 )
 
                 logger.info(f"✅ Iteration 1: Got {len(context_chunks)} chunks")
-            
+        
         except Exception as e:
             logger.warning(f"❌ RAG search failed: {e}")
             context_chunks = []
@@ -573,10 +656,35 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             logger.info("Stage 1: Building Knowledge Graph from retrieved chunks...")
 
             # Getting chunk texts and embeddings for graph
-            chunk_texts = [c.get('text', '') for c in context_chunks]
-            chunk_embeddings = get_embeddings(chunk_texts)
+            
+            # Sanitize and validate chunk texts
+            chunk_texts = [
+                (c.get('text') or '').strip()[:5000]  # Max 5000 chars per chunk
+                for c in context_chunks
+            ]
+
+            non_empty_texts = [t for t in chunk_texts if t]
+
+            if not non_empty_texts:
+                logger.warning("⚠️ All chunk texts are empty!")
+                chunk_embeddings = np.zeros((len(context_chunks), 384))
+                logger.warning("   Using zero embeddings as fallback")
+            else:
+                try:
+                    chunk_embeddings = get_embeddings(chunk_texts)
+
+                    if isinstance(chunk_embeddings, np.ndarray):
+                        nan_count = np.isnan(chunk_embeddings).sum()
+
+                    if nan_count > 0:
+                        logger.warning(f"⚠️ Found {nan_count} NaN values in embeddings!")
+                        chunk_embeddings = np.nan_to_num(chunk_embeddings, nan=0.0)
+                except Exception as e:
+                    logger.error(f"❌ Embedding failed: {e}")
+                    chunk_embeddings = np.zeros((len(context_chunks), 384))
             
             graph_builder = app.state.graph_builder
+
             if graph_builder is None:
                 raise ValueError("❌ Graph builder not initialized")
             
@@ -594,8 +702,7 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             # Computing how each chunk relates to query through graph structure
             graph_distances = graph_builder.compute_graph_distances(
                 query_text=request.message,
-                chunk_ids=chunk_ids,
-                graph=graph
+                chunk_ids=chunk_ids
             )
             
             logger.info(f"✅ Graph distances computed for {len(graph_distances)} chunks")
@@ -610,8 +717,44 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
         except Exception as e:
             logger.error(f"❌ Graph building failed: {e}")
             logger.warning("⚠️ Continuing without graph analysis (fallback to semantic only)")
-            graph_distances = {}
-            chunk_embeddings = []
+            
+            graph_distances = {
+                c.get('id', f'chunk_{i}'): 0.5  # Uniform distance (neutral)
+                for i, c in enumerate(context_chunks)
+            }
+    
+            if not chunk_embeddings or len(chunk_embeddings) == 0:
+                logger.info("Getting embeddings for fallback reranking...")
+                
+                # Sanitize and validate chunk texts
+                chunk_texts = [
+                    (c.get('text') or '').strip()[:5000]  # Max 5000 chars per chunk
+                    for c in context_chunks
+                ]
+
+                non_empty_texts = [t for t in chunk_texts if t]
+
+                if not non_empty_texts:
+                    logger.warning("⚠️ All chunk texts are empty!")
+                    chunk_embeddings = np.zeros((len(context_chunks), 384))
+                    logger.warning("   Using zero embeddings as fallback")
+                else:
+                    try:
+                        chunk_embeddings = get_embeddings(chunk_texts)
+
+                        if isinstance(chunk_embeddings, np.ndarray):
+                            nan_count = np.isnan(chunk_embeddings).sum()
+
+                        if nan_count > 0:
+                            logger.warning(f"⚠️ Found {nan_count} NaN values in embeddings!")
+                            chunk_embeddings = np.nan_to_num(chunk_embeddings, nan=0.0)
+                    except Exception as e:
+                        logger.error(f"❌ Embedding failed: {e}")
+                        chunk_embeddings = np.zeros((len(context_chunks), 384))
+    
+            logger.info(f"✅ Fallback: using semantic-only reranking (without graph)")
+    
+    log_gpu_memory_detailed("AFTER_RETRIEVAL", iteration)
 
     # ════════════════════════════════════════════════════════════════════════════
     # STEP 4: Hybrid Reranking (semantic + graph-based)
@@ -624,19 +767,68 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             hybrid_scorer = app.state.hybrid_scorer
             if hybrid_scorer is None:
                 raise ValueError("❌ Hybrid scorer not initialized")
-            
+
             # Ensure embeddings are available
-            if not chunk_embeddings:
-                chunk_texts = [c.get('text', '') for c in context_chunks]
-                chunk_embeddings = get_embeddings(chunk_texts)
+            chunk_embeddings_is_empty = (
+                chunk_embeddings is None or 
+                (isinstance(chunk_embeddings, list) and len(chunk_embeddings) == 0) or
+                (isinstance(chunk_embeddings, np.ndarray) and chunk_embeddings.size == 0)
+            )
+
+            if chunk_embeddings_is_empty:
+                logger.info("⚠️ chunk_embeddings is empty, getting embeddings...")
+                
+                # Sanitize and validate chunk texts
+                chunk_texts = [
+                    (c.get('text') or '').strip()[:5000]  # Max 5000 chars per chunk
+                    for c in context_chunks
+                ]
+
+                non_empty_texts = [t for t in chunk_texts if t]
+
+                if not non_empty_texts:
+                    logger.warning("⚠️ All chunk texts are empty!")
+                    chunk_embeddings = np.zeros((len(context_chunks), 384))
+                    logger.warning("   Using zero embeddings as fallback")
+                else:
+                    try:
+                        chunk_embeddings = get_embeddings(chunk_texts)
+
+                        if isinstance(chunk_embeddings, np.ndarray):
+                            nan_count = np.isnan(chunk_embeddings).sum()
+
+                        if nan_count > 0:
+                            logger.warning(f"⚠️ Found {nan_count} NaN values in embeddings!")
+                            chunk_embeddings = np.nan_to_num(chunk_embeddings, nan=0.0)
+                    except Exception as e:
+                        logger.error(f"❌ Embedding failed: {e}")
+                        chunk_embeddings = np.zeros((len(context_chunks), 384))
+
+                logger.info(f"✅ Got embeddings")
+            else:
+                logger.info("chunk_embeddings is not empty")
+
+            # Check type of chunk_embeddings
+            logger.info(f"Type of chunk_embeddings: {type(chunk_embeddings)}")
+            logger.info(f"Type of query_embedding_vec: {type(query_embedding_vec)}")
+
+            logger.info("Checking is chunk_embeddings an instance...")
+            if isinstance(chunk_embeddings, list):
+                chunk_embeddings = np.array(chunk_embeddings)
+        
+            logger.info("Checking is query_embedding an instance...")
+            if isinstance(query_embedding_vec, list):
+                query_embedding_vec = np.array(query_embedding_vec)
             
             # Handle empty graph_distances (use fallback)
             if not graph_distances:
                 logger.warning("⚠️ No graph distances, using fallback (all chunks equally distant)")
                 graph_distances = {
-                    c.get('id', f'chunk_{i}'): 1000.0
+                    c.get('id', f'chunk_{i}'): 0.5
                     for i, c in enumerate(context_chunks)
                 }
+
+            logger.info("Stage 2: Calling hybrid_scorer.rerank_chunks()...")
 
             # Reranking
             final_context = hybrid_scorer.rerank_chunks(
@@ -653,16 +845,33 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             if final_context:
                 for i, chunk in enumerate(final_context[:3]):
                     chunk_id = chunk.get('id', 'unknown')
-                    sim_score = chunk.get('similarity_score', chunk.get('similarity', 'N/A'))
-                    logger.info(f"   [{i+1}] {chunk_id}: score={sim_score}")
+                    hybrid_score = chunk.get('hybrid_score', 'N/A')
+                    semantic_score = chunk.get('semantic_score', 'N/A')
+                    graph_score = chunk.get('graph_score', 'N/A')
+        
+                    # Formating scores
+                    hybrid_str = f"{hybrid_score:.4f}" if isinstance(hybrid_score, float) else "N/A"
+                    semantic_str = f"{semantic_score:.4f}" if isinstance(semantic_score, float) else "N/A"
+                    graph_str = f"{graph_score:.4f}" if isinstance(graph_score, float) else "N/A"
+        
+                    logger.info(
+                        f"   [{i+1}] {chunk_id}: "
+                        f"hybrid={hybrid_str} "
+                        f"(semantic={semantic_str}, graph={graph_str})"
+                    )
 
         except Exception as e:
             logger.error(f"❌ Hybrid reranking failed: {e}")
+            import traceback
+            logger.error(f"Full Traceback:\n{traceback.format_exc()}")
             logger.warning("⚠️ Fallback: using original chunk order")
             final_context = context_chunks[:request.n_chunks]
 
+        log_gpu_memory_detailed("AFTER_RANKING", iteration)
+
     else:
         # No RAG or no chunks
+        logger.info("⚠️ Stage 2: Skipped (no RAG or empty context)")
         final_context = context_chunks[:request.n_chunks] if context_chunks else []
 
     # ════════════════════════════════════════════════════════════════════════════
@@ -679,42 +888,83 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
         logger.info(f"📌 Marked {len(used_chunk_ids)} chunks as used for next iteration")
 
     # ════════════════════════════════════════════════════════════════════════════
-    # STEP 6: Memory management and swapping
+    # STEP 6.1: Initialize memory management
     # ════════════════════════════════════════════════════════════════════════════
 
+    logger.info("⚠️ Stage 3.1 (experimental): Memory Management...")
+    log_gpu_memory_detailed("BEFORE_SWAP_INIT", iteration)
+
+    if iteration == 1 and not session_data.get('swap_initialized', False):
+        logger.info("First iteration - initializing swap manager...")
+
+        try:
+            all_chunks = await get_all_session_chunks(session_id)
+
+            if all_chunks and len(all_chunks) > 0:
+                logger.info(f"Building permanent CPU RAM archive for {len(all_chunks)} chunks...")
+
+                swap_manager = app.state.swap_manager
+                swap_manager.initialize_chunks(all_chunks)
+
+                app.state._swap_initialized = True
+                session_data['swap_initialized'] = True
+
+                logger.info(f" ✅ Swap manager initialized successfully!")
+                logger.info(f"    - CPU archive: {len(swap_manager.cpu_chunks)} chunks")
+                logger.info(f"    - GPU preload: {len(swap_manager.gpu_chunks)} chunks (top-5)")
+            
+            else:
+                logger.warning("⚠️ No chunks to initialize swap manager with")
+                session_data['swap_initialized'] = False
+
+        except Exception as e:
+            logger.error(f"❌ Swap initialization failed: {e}")
+            import traceback
+            logger.error(f"Detailed error:\n{traceback.format_exc()}")
+            # Continue anyway - swap won't work but system still functional
+            pass
+    
+    elif iteration > 1 and app.state._swap_initialized:
+        logger.info(f"ℹ️ Iteration {iteration}: Swap manager already initialized, using existing archives")
+
+    log_gpu_memory_detailed("AFTER_SWAP_INIT", iteration)
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # STEP 6.2: Making swapping decisions
+    # ════════════════════════════════════════════════════════════════════════════
+
+    swap_action = 'none'
+
     try:
-        logger.info("Stage 3: Memory Management...")
-        
+        logger.info("⚠️ Stage 3.2 (experimental): Swap Decision and Execution...")
+
         swap_manager = app.state.swap_manager
-        
-        # Initialize on first iteration
-        if not app.state._swap_initialized:
-            swap_manager.initialize_chunks(final_context)
-            app.state._swap_initialized = True
-            logger.info("   ✅ Swap manager initialized")
-        
-        # Update prefetch buffer
+
+        # Update prefetch buffer with current chunks
         swap_manager.update_prefetch_buffer(final_context)
-        
+
         # Calculate context size
         current_context_tokens = sum(
             c.get('metadata', {}).get('chunk_size', 500)
             for c in final_context
         )
-        
-        # Decide swap action
-        swap_decision = swap_manager.decide_swap_action(
-            final_context,
-            current_context_tokens
+
+        # Decide swap action based on memory stats
+        swap_decision = app.state.swap_manager.decide_swap_action(
+            final_context, 
+            current_context_tokens,
+            iteration=iteration
         )
-        
+
         # Execute swap
         swap_manager.execute_swap_decision(swap_decision)
-        
         swap_action = swap_decision.get('action', 'none')
-        logger.info(f"   ✅ Memory action: {swap_action}")
-        logger.info(f"   Context tokens: {current_context_tokens}")
-        
+
+        logger.info(f" ✅ Swap action: {swap_action}")
+        logger.info(f" Context tokens: {current_context_tokens}")
+
+        log_gpu_memory_detailed("AFTER_SWAP_DECISION", iteration)
+
     except Exception as e:
         logger.warning(f"⚠️ Swap management skipped: {e}")
         swap_action = 'skipped'
@@ -723,7 +973,12 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
     # STEP 7: LLM Inference with prepared context
     # ════════════════════════════════════════════════════════════════════════════
 
-    prompt = build_prompt(final_context, request.message)
+    prompt = build_prompt(
+        final_context, 
+        request.message,
+        max_context_tokens=settings['prompt'].get('max_context_tokens', 5000),
+        enable_context_limit=settings['prompt'].get('enable_context_limit', True)
+    )
     
     inference_start = time.time()
 
@@ -754,6 +1009,8 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
     except Exception as e:
         logger.error(f"❌ LLM inference failed: {e}")
         raise HTTPException(status_code=502, detail=f"LLM inference failed: {str(e)}")
+    
+    log_gpu_memory_detailed("AFTER_INFERENCE", iteration)
 
     # ════════════════════════════════════════════════════════════════════════════
     # STEP 8: Collect detailed statistics
@@ -768,6 +1025,52 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
     logger.info(f"   - Total explored: {chunking_stats['used_chunks']}/{chunking_stats['total_chunks_in_pool']}")
     logger.info(f"   - Coverage: {chunking_stats['coverage_percent']:.1f}%")
     logger.info(f"   - Inference time: {inference_time:.3f}s")
+
+    
+    # ════════════════════════════════════════════════════════════════════════════
+    # STEP 9: Log session metrics for analytics
+    # ════════════════════════════════════════════════════════════════════════════
+
+    try:
+        session_metrics = {
+            "session_id": session_id,
+            "iteration": iteration,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        
+            # Chunk statistics
+            "chunks_used": len(final_context),
+            "new_chunks_in_iteration": new_chunks_count,
+            "excluded_from_previous": len(excluded_chunks),
+            "total_explored": chunking_stats['used_chunks'],
+            "coverage_percent": chunking_stats['coverage_percent'],
+        
+            # Performance
+            "inference_time_sec": round(inference_time, 3),
+            "context_tokens": sum(c.get('metadata', {}).get('chunk_size', 500) for c in final_context),
+            "swap_action": swap_action,
+        
+            # Memory
+            "gpu_memory_mb": {
+                "allocated": round(torch.cuda.memory_allocated() / 1024 / 1024, 2) if torch.cuda.is_available() else 0,
+                "reserved": round(torch.cuda.memory_reserved() / 1024 / 1024, 2) if torch.cuda.is_available() else 0,
+            } if torch.cuda.is_available() else {},
+        
+            # LLM output
+            "tokens_generated": usage.get('completion_tokens', 0),
+            "tokens_in_prompt": usage.get('prompt_tokens', 0),
+        }
+    
+        # Line-delimited JSON
+        metrics_file = Path("logs/session_metrics.jsonl")
+        metrics_file.parent.mkdir(parents=True, exist_ok=True)
+    
+        async with aiofiles.open(metrics_file, 'a') as f:
+            await f.write(json.dumps(session_metrics) + "\n")
+    
+        logger.debug(f"✅ Metrics logged for iteration {iteration}")
+    
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to log metrics: {e}")
 
     # ════════════════════════════════════════════════════════════════════════════
     # RETURN DETAILED RESPONSE with GRAPH STATISTICS
@@ -828,8 +1131,17 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             "swap_action": swap_action,
             
             # ✅ COMPLETE S-GAS ALGORITHM STATISTICS
-            "sgas_statistics": sgas_statistics,
-            
+            "swap_statistics": {
+                "total_swap_operations": app.state.swap_manager.total_swaps if app.state.swap_manager else 0,
+                "swap_to_ram_count": app.state.swap_manager.swap_to_ram_count if app.state.swap_manager else 0,
+                "swap_to_gpu_count": app.state.swap_manager.swap_to_gpu_count if app.state.swap_manager else 0,
+                "chunks_in_gpu": len(app.state.swap_manager.gpu_chunks) if app.state.swap_manager else 0,
+                "chunks_in_archive": len(app.state.swap_manager.cpu_chunks) if app.state.swap_manager else 0,
+                "chunks_in_ram": (len(app.state.swap_manager.cpu_chunks) - len(app.state.swap_manager.gpu_chunks)) if app.state.swap_manager else 0,
+                "last_action": app.state.swap_manager.last_action if app.state.swap_manager else "none",
+                "swap_triggered": app.state.swap_manager.total_swaps > 0 if app.state.swap_manager else False,
+            },
+
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     )
@@ -870,23 +1182,27 @@ async def list_session_documents(session_id: str):
         doc_processor = app.state.document_processor
         session_docs_metadata = doc_processor.get_session_documents(session_id)
         documents_data = session_docs_metadata.to_dict()
-        documents = documents_data.get('documents', [])
+
+        # Getting active documents
+        active_documents = documents_data.get('active_documents', [])
 
         # Converting
         result_documents = []
-        for doc_info in documents:
-            result_documents.append({
-                'filename': doc_info.get('document_name', 'unknown'),
-                'chunks': doc_info.get('chunks_count', 0),
-                'size': doc_info.get('total_size', 0),
-                'uuid': doc_info.get('document_uuid', ''),
-                'version': doc_info.get('version', 1)
-            })
+        for doc_info in active_documents:
+            if isinstance(doc_info, dict):
+                result_documents.append({
+                    'filename': doc_info.get('document_name', 'unknown'),
+                    'chunks': len(doc_info.get('chunks', [])),  # Count of chunks
+                    'size': doc_info.get('file_size', 0),
+                    'uuid': doc_info.get('document_uuid', ''),
+                    'version': doc_info.get('version', 1)
+                })
+            else:
+                logger.warning(f"⚠️ Skipping invalid document entry: {type(doc_info)} - {doc_info}")
 
         total_chunks = sum(d.get('chunks', 0) for d in result_documents)
-        
         logger.info(f"✅ Listed {len(result_documents)} documents for session {session_id}")
-    
+
         return {
             "session_id": session_id,
             "total_chunks": total_chunks,
@@ -905,7 +1221,7 @@ async def get_sgas_statistics():
         graph_builder = app.state.graph_builder
         swap_manager = app.state.swap_manager
         hybrid_scorer = app.state.hybrid_scorer
-
+        
         statistics = {
             "graph": graph_builder.get_graph_statistics() if graph_builder else {},
             "swap": swap_manager.get_statistics() if swap_manager else {},
@@ -914,9 +1230,8 @@ async def get_sgas_statistics():
                 "beta": hybrid_scorer.beta if hybrid_scorer else 0.4
             }
         }
-
+        
         return JSONResponse(content=statistics, status_code=200)
-
     except Exception as e:
         logger.error(f"❌ Error retrieving S-GAS statistics: {e}")
         return JSONResponse(

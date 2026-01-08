@@ -14,10 +14,10 @@ class SemanticChunker:
     Advanced chunking that preserves semantic meaning.
     
     Main features:
-    ✅ Clean chunking (without priorities)
-    ✅ Session-based tracking used chunks
-    ✅ S-GAS iterative search supported
-    ✅ Works for ANY documents
+    - Clean chunking (without priorities)
+    - Session-based tracking used chunks
+    - S-GAS iterative search supported
+    - Works for ANY documents
     """
 
     def __init__(self,
@@ -81,7 +81,7 @@ class SemanticChunker:
         if not doc_header.document_uuid:
             raise ValueError("⚠️ Warning: DocumentHeader must have document_uuid!")
         
-        logger.info(f"📄 Initializing document for session {session_id}...")
+        logger.info(f"Initializing document for session {session_id}...")
 
         # Create chunks
         all_chunks = self._chunk_document(text, doc_header, session_id)
@@ -128,7 +128,7 @@ class SemanticChunker:
             logger.warning("⚠️ Warning: No sentences found in text")
             return []
         
-        logger.info(f"📊 Segmented into {len(sentences)} sentences")
+        logger.info(f"Segmented into {len(sentences)} sentences")
 
         # Step 2: Group sentences into chunks
         chunks = []
