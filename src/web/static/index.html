@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S-GAS Manager Interface</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="title">S-GAS Manager</h1>
+            <p class="subtitle">
+                Semantic Graph Adaptive Swapping - Intelligent memory management for language models
+            </p>
+            
+            <div class="status-indicator">
+                <div id="statusDot" class="status-dot"></div>
+                <span id="statusText" class="status-text">Connecting to server...</span>
+            </div>
+        </header>
+
+        <main class="main">
+            <div class="chat-container">
+                <div id="chatMessages" class="chat-messages">
+                    <div class="message system-message">
+                        <div class="message-content">
+                            Welcome to S-GAS Manager! Send a message to start the conversation.
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="message-form">
+                    <div id="spinner" class="spinner hidden">
+                        <div class="spinner-dot"></div>
+                        <div class="spinner-dot"></div>
+                        <div class="spinner-dot"></div>
+                    </div>
+
+                    <!-- File Upload Section -->
+                    <div class="file-upload-section">
+                        <div class="file-upload-area">
+                            <input type="file" id="fileInput" accept=".pdf,.txt,.docx,.doc" multiple hidden>
+                            <button type="button" id="uploadButton" class="btn btn--outline btn--sm upload-button">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17,8 12,3 7,8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                Upload Files
+                            </button>
+                            <div id="fileList" class="file-list hidden"></div>
+                        </div>
+                    </div>
+                    
+                    <form id="messageForm" class="input-container">
+                        <textarea 
+                            id="messageInput" 
+                            placeholder="Enter your message here... (Ctrl+Enter to send)"
+                            rows="3"
+                        ></textarea>
+                        
+                        <div class="form-controls">
+                            <div class="rag-info">
+                                <span class="rag-status-text">RAG automatically enabled when files are uploaded</span>
+                            </div>
+                            
+                            <button type="submit" id="sendButton" class="send-button">
+                                Send
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            
+            <aside class="sidebar">
+                <div class="sidebar-section">
+                    <h3>Statistics</h3>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-label">Messages</span>
+                            <span id="messageCount" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Model</span>
+                            <span id="modelName" class="stat-value">—</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Embedding Dimension</span>
+                            <span id="embeddingDim" class="stat-value">—</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3>Document Files</h3>
+                    <div id="uploadedFiles" class="uploaded-files">
+                        <p class="no-files-text">No files uploaded</p>
+                    </div>
+                    <button id="refreshFiles" class="btn btn--secondary btn--sm btn--full-width">
+                        Refresh List
+                    </button>
+                </div>
+                
+                <div class="sidebar-section">
+                    <h3>Last Request</h3>
+                    <div id="requestInfo" class="request-info">
+                        No data
+                    </div>
+                </div>
+                
+                <div class="sidebar-section">
+                    <h3>Actions</h3>
+                    <div class="action-buttons">
+                        <button id="clearChat" class="btn btn--secondary btn--full-width">
+                            Clear Chat
+                        </button>
+                        <button id="exportChat" class="btn btn--outline btn--full-width">
+                            Export History
+                        </button>
+                    </div>
+                </div>
+            </aside>
+        </main>
+    </div>
+    
+    <script src="/static/script.js"></script>
+</body>
+</html>

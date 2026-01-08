@@ -1,0 +1,60 @@
+# --- Backend and ML-base ---
+torch>=2.5.1
+vllm>=0.6.0
+transformers>=4.46.0
+accelerate>=0.34.0
+
+# --- Quantization and optimization ---
+autoawq>=0.2.6
+
+# --- Embeddings and db ---
+sentence-transformers>=3.0.0
+chromadb>=0.4.24
+hnswlib>=0.8.0
+
+# --- Document processing ---
+PyPDF2>=3.0.1
+python-docx>=1.1.0
+python-pptx>=0.6.21
+openpyxl>=3.1.0
+
+# --- Graph processes ---
+networkx>=3.2
+spacy>=3.7.0
+matplotlib>=3.7.0
+
+# --- Web-API and processing ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+httpx>=0.27.0
+python-multipart>=0.0.9
+aiofiles>=23.2.0
+
+# --- Configs and utilits ---
+python-dotenv>=1.0.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+
+# --- Data processing ---
+pandas>=2.2.0
+numpy>=1.26.0
+scikit-learn>=1.5.0
+
+# --- Logs and monitoring ---
+tqdm>=4.66.0
+rich>=13.7.0
+
+# --- Additional tools ---
+redis>=5.0.0
+regex>=2024.0.0
+
+# --- GPU Monitoring and Russian language processing ---
+nvidia-ml-py>=13.0.0
+pymorphy3>=2.0.0
+pymorphy3-dicts-ru>=2.4
+
+# --- Development (optionally) ---
+# pytest>=8.0.0
+# pytest-asyncio>=0.23.0
+# black>=24.0.0
+# isort>=5.13.0

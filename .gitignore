@@ -1,0 +1,42 @@
+# Virtual environment
+S-GAS_Manager_env/
+.env
+
+# Cache and logs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+*.log
+.mypy_cache/
+.ruff_cache/
+
+# Data and models
+data/
+!data/.gitkeep
+models/
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+docker/docker-compose.override.yml
+docker/.env
+
+# Operating systems
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Python packages
+*.egg
+*.egg-info/
