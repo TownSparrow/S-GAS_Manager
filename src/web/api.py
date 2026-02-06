@@ -45,7 +45,7 @@ from src.modules.retrieval.retrieval_models import (
     SessionDocumentMetadata
 )
 
-from src.modules.graph.graph_builder import KnowledgeGraphBuilder
+from src.modules.graph.graph_manager import KnowledgeGraphBuilder
 from src.core.scoring import HybridScorer
 from src.modules.swap.swap_manager import SwapManager
 
@@ -64,7 +64,7 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
-VERSION = "v0.1.0-alpha.2"
+VERSION = "v0.1.0-alpha.3"
 
 # ============================================================================
 # Memory processing
@@ -144,9 +144,14 @@ async def lifespan(app: FastAPI):
         
         # Initialize Graph Builder
         graph_builder = KnowledgeGraphBuilder(
-            spacy_model="ru_core_news_md", # or "en_core_news_md"
-            use_gpu=False
+            priority_model_for_en="en_core_web_sm",
+            priority_model_for_ru="natasha",
+            priority_kw_extractor_for_ru="yake",
+            priority_kw_extractor_for_en="yake",
+            use_gpu=False # True if GPU is requiered
         )
+
+        
         logger.info("✅ KnowledgeGraphBuilder initialized")
         
         # Initialize Hybrid Scorer
@@ -706,16 +711,22 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             logger.info(f"✅ Graph built: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
 
             # Graph analysis: computing relevance via graph structure
+            # Logging chunk_ids before passing to compute_graph_distances
             chunk_ids = [c.get('id', f'chunk_{i}') for i, c in enumerate(context_chunks)]
-            
+            logger.debug(f"Chunk IDs for graph analysis: {chunk_ids[:5]}...")
+
             # Computing how each chunk relates to query through graph structure
-            graph_distances = graph_builder.compute_graph_distances(
-                query_text=request.message,
-                chunk_ids=chunk_ids
-            )
-            
-            logger.info(f"✅ Graph distances computed for {len(graph_distances)} chunks")
-    
+            try:
+                graph_distances = graph_builder.compute_graph_distances(
+                    query_text=request.message,
+                    chunk_ids=chunk_ids
+                )
+                logger.info(f"✅ Graph distances computed for {len(graph_distances)} chunks")
+            except Exception as e_compute:
+                logger.error(f"❌ Error inside compute_graph_distances: {e_compute}")
+                logger.exception("Detailed error inside compute_graph_distances:")
+                raise e_compute
+
             # Log graph structure info
             graph_stats = graph_builder.get_graph_statistics()
             logger.info(f"Graph Statistics:")
@@ -724,7 +735,8 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             logger.info(f"   - Density: {graph_stats.get('density', 0):.3f}")
     
         except Exception as e:
-            logger.error(f"❌ Graph building failed: {e}")
+            logger.error(f"❌ Graph building/analysis failed: {e}")
+            logger.exception("Detailed error in graph building/analysis:")
             logger.warning("⚠️ Continuing without graph analysis (fallback to semantic only)")
             
             graph_distances = {
@@ -732,7 +744,7 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
                 for i, c in enumerate(context_chunks)
             }
     
-            if not chunk_embeddings or len(chunk_embeddings) == 0:
+            if chunk_embeddings is None or len(chunk_embeddings) == 0:
                 logger.info("Getting embeddings for fallback reranking...")
                 
                 # Sanitize and validate chunk texts

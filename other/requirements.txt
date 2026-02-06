@@ -48,10 +48,18 @@ rich>=13.7.0
 redis>=5.0.0
 regex>=2024.0.0
 
-# --- GPU Monitoring and Russian language processing ---
+# --- GPU Monitoring ---
 nvidia-ml-py>=13.0.0
+
+# --- Russian language processing ---
 pymorphy3>=2.0.0
 pymorphy3-dicts-ru>=2.4
+langdetect>=1.0.9
+natasha>=1.6.0 
+yargy>=0.15.0
+
+# --- Keyword Extraction ---
+yake>-0.4.8
 
 # --- Development (optionally) ---
 # pytest>=8.0.0
