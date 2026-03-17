@@ -38,17 +38,23 @@ pip install vllm
 echo "6) Installation of dependence form requirements.txt..."
 if [ -f "other/requirements.txt" ]; then
     pip install -r other/requirements.txt
-elif [ -f "requirements.txt" ]; then
-    pip install -r requirements.txt
 else
     echo "❌ File requirements.txt is not detected"
     exit 1
 fi
 
-# 7. spaCy models
-echo "7) Downloading the spaCy models..."
+# 7a. spaCy models
+echo "7a) Downloading the spaCy models..."
 python -m spacy download en_core_web_sm
-python -m spacy download ru_core_news_md
+python -m spacy download ru_core_news_lg
+
+# 7b. Natasha model for NER
+echo "7b) Installing Natasha for Russian NER..."
+pip install natasha yargy
+
+# 7c. YAKE
+echo "7c) Installing YAKE for keyword extraction..."
+pip install yake
 
 # 8. Creating the directories
 echo "8) Creating the directories..."
@@ -66,6 +72,9 @@ python3 -c "import torch; print(f'✅ CUDA version: {torch.version.cuda}')" || t
 python3 -c "import vllm; print(f'✅ vLLM: {vllm.__version__}')"
 python3 -c "import transformers; print(f'✅ Transformers: {transformers.__version__}')"
 python3 -c "import chromadb; print(f'✅ ChromaDB: {chromadb.__version__}')"
+python3 -c "import pymorphy3; print('✅ PyMorphy3: available')" 2>/dev/null || echo "⚠️ PyMorphy3: not found"
+python3 -c "import natasha; print('✅ Natasha: available')" 2>/dev/null || echo "⚠️ Natasha: not found"
+python3 -c "import yake; print('✅ YAKE: available')" 2>/dev/null || echo "⚠️ YAKE: not found"
 
 echo ""
 echo "✅ Installation is completed!"

@@ -45,9 +45,11 @@ from src.modules.retrieval.retrieval_models import (
     SessionDocumentMetadata
 )
 
-from src.modules.graph.graph_builder import KnowledgeGraphBuilder
+from src.modules.graph.graph_manager import KnowledgeGraphBuilder
 from src.core.scoring import HybridScorer
 from src.modules.swap.swap_manager import SwapManager
+
+from src.modules.monitoring.kv_monitor import KVCacheMonitor
 
 # ============================================================================
 # Init of app and basic services
@@ -61,6 +63,8 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
+
+VERSION = "v0.1.0-alpha.3"
 
 # ============================================================================
 # Memory processing
@@ -140,9 +144,14 @@ async def lifespan(app: FastAPI):
         
         # Initialize Graph Builder
         graph_builder = KnowledgeGraphBuilder(
-            spacy_model="ru_core_news_md", # or "en_core_news_md"
-            use_gpu=False
+            priority_model_for_en="en_core_web_sm",
+            priority_model_for_ru="natasha",
+            priority_kw_extractor_for_ru="yake",
+            priority_kw_extractor_for_en="yake",
+            use_gpu=False # True if GPU is requiered
         )
+
+        
         logger.info("✅ KnowledgeGraphBuilder initialized")
         
         # Initialize Hybrid Scorer
@@ -161,8 +170,11 @@ async def lifespan(app: FastAPI):
             debug_mode=settings['swap'].get('debug_mode', False),
             force_offload_on_iteration=settings['swap'].get('force_offload_on_iteration', -1)
         )
-
         logger.info("✅ SwapManager initialized")
+
+        # Initialize KV Cahce Monitor
+        kv_monitor = KVCacheMonitor()
+        logger.info("✅ KVCacheMonitor initialized")
         
         # Store all components in app.state
         app.state.vector_store = vector_store
@@ -171,6 +183,7 @@ async def lifespan(app: FastAPI):
         app.state.graph_builder = graph_builder
         app.state.hybrid_scorer = hybrid_scorer
         app.state.swap_manager = swap_manager
+        app.state.kv_monitor = kv_monitor
         
         # Initialize iteration tracking
         app.state.sessions = {}
@@ -192,13 +205,14 @@ async def lifespan(app: FastAPI):
     app.state.graph_builder = None
     app.state.hybrid_scorer = None
     app.state.swap_manager = None
+    app.state.kv_monitor = None
 
 
 # Create FastAPI app with lifespan
 app = FastAPI(
     title="S-GAS Manager API",
     description="Semantic-Graph Adaptive Swapping (S-GAS) for Small Language Models",
-    version="v0.1.0-alpha.1",
+    version=VERSION,
     lifespan=lifespan,
 )
 
@@ -380,7 +394,7 @@ async def serve_web_client():
     return JSONResponse(
         {
             "message": "S-GAS Manager API",
-            "version": "v0.1.0-alpha.1",
+            "version": VERSION,
             "endpoints": [
                 "/api/session/new",
                 "/api/session/{session_id}/upload-document",
@@ -417,7 +431,7 @@ async def health_check():
         "model": settings['vllm']['model_name'],
         "active_sessions": len(app.state.sessions),
         "time": datetime.now(timezone.utc).isoformat(),
-        "api_version": "v0.1.0-alpha.1",
+        "api_version": VERSION,
     }
 
 
@@ -697,16 +711,22 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             logger.info(f"✅ Graph built: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
 
             # Graph analysis: computing relevance via graph structure
+            # Logging chunk_ids before passing to compute_graph_distances
             chunk_ids = [c.get('id', f'chunk_{i}') for i, c in enumerate(context_chunks)]
-            
+            logger.debug(f"Chunk IDs for graph analysis: {chunk_ids[:5]}...")
+
             # Computing how each chunk relates to query through graph structure
-            graph_distances = graph_builder.compute_graph_distances(
-                query_text=request.message,
-                chunk_ids=chunk_ids
-            )
-            
-            logger.info(f"✅ Graph distances computed for {len(graph_distances)} chunks")
-    
+            try:
+                graph_distances = graph_builder.compute_graph_distances(
+                    query_text=request.message,
+                    chunk_ids=chunk_ids
+                )
+                logger.info(f"✅ Graph distances computed for {len(graph_distances)} chunks")
+            except Exception as e_compute:
+                logger.error(f"❌ Error inside compute_graph_distances: {e_compute}")
+                logger.exception("Detailed error inside compute_graph_distances:")
+                raise e_compute
+
             # Log graph structure info
             graph_stats = graph_builder.get_graph_statistics()
             logger.info(f"Graph Statistics:")
@@ -715,7 +735,8 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
             logger.info(f"   - Density: {graph_stats.get('density', 0):.3f}")
     
         except Exception as e:
-            logger.error(f"❌ Graph building failed: {e}")
+            logger.error(f"❌ Graph building/analysis failed: {e}")
+            logger.exception("Detailed error in graph building/analysis:")
             logger.warning("⚠️ Continuing without graph analysis (fallback to semantic only)")
             
             graph_distances = {
@@ -723,7 +744,7 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
                 for i, c in enumerate(context_chunks)
             }
     
-            if not chunk_embeddings or len(chunk_embeddings) == 0:
+            if chunk_embeddings is None or len(chunk_embeddings) == 0:
                 logger.info("Getting embeddings for fallback reranking...")
                 
                 # Sanitize and validate chunk texts
@@ -875,18 +896,44 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
         final_context = context_chunks[:request.n_chunks] if context_chunks else []
 
     # ════════════════════════════════════════════════════════════════════════════
-    # STEP 5: Mark used chunks for next iteration (before LLM call)
+    # STEP 5.1: Mark used chunks for next iteration before LLM call
     # ════════════════════════════════════════════════════════════════════════════
 
     if final_context:
         used_chunk_ids = [c['id'] for c in final_context if 'id' in c]
         session_data['excluded_chunks'].extend(used_chunk_ids)
         
-        # Also mark in chunker for tracking
+        # Marking used chunks in chunker for tracking
         app.state.chunker.mark_chunks_used(session_id, used_chunk_ids, iteration)
         
-        logger.info(f"📌 Marked {len(used_chunk_ids)} chunks as used for next iteration")
+        logger.info(f"Marked {len(used_chunk_ids)} chunks as used for next iteration")
+    else:
+        logger.warning(f"⚠️ No marked used chunks for next iteration")
+        used_chunk_ids = []
 
+    # ════════════════════════════════════════════════════════════════════════════
+    # STEP 5.2: Starting KV Cache Monitor
+    # ════════════════════════════════════════════════════════════════════════════
+    # Approximate count of prompt length
+    context_text_for_prompt = "\n\n".join([c.get('text', '') for c in final_context])
+    full_prompt_text = f"Context:\n{context_text_for_prompt}\n\nQuery: {request.message}\nAnswer:"
+    prompt_length_tokens_approx = len(full_prompt_text.split())
+
+    # TODO: To get acccess to tokenizer of model to recieve exact length of prompt
+    # Meanwhile just using the appoximate value
+    prompt_length_tokens = prompt_length_tokens_approx
+
+    n_selected_chunks = len(final_context)
+    n_archived_chunks_this_iter = len(used_chunk_ids)
+
+    # Calling the logging of KV Monitor
+    app.state.kv_monitor.log_iteration_start(
+        iteration=iteration,
+        prompt_length_tokens=prompt_length_tokens,
+        n_selected_chunks=n_selected_chunks,
+        n_archived_chunks_this_iter=n_archived_chunks_this_iter
+    )
+    
     # ════════════════════════════════════════════════════════════════════════════
     # STEP 6.1: Initialize memory management
     # ════════════════════════════════════════════════════════════════════════════
@@ -1010,6 +1057,17 @@ async def chat_endpoint(session_id: str, request: ChatRequest):
         logger.error(f"❌ LLM inference failed: {e}")
         raise HTTPException(status_code=502, detail=f"LLM inference failed: {str(e)}")
     
+    # Calling KV Monitor in the end of inference
+    generation_time_ms = inference_time * 1000 # Converting s in ms
+
+    app.state.kv_monitor.log_iteration_end(
+        iteration=iteration,
+        generation_time_ms=generation_time_ms,
+        prompt_length_tokens=prompt_length_tokens,
+        n_selected_chunks=n_selected_chunks,
+        n_archived_chunks_this_iter=n_archived_chunks_this_iter
+    )
+
     log_gpu_memory_detailed("AFTER_INFERENCE", iteration)
 
     # ════════════════════════════════════════════════════════════════════════════
