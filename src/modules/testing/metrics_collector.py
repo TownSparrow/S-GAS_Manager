@@ -78,43 +78,54 @@ class MetricsCollector:
         # Coverage
         coverages = [m['coverage_ratio'] for m in metrics]
         
+        avg_vram = sum(vrms_allocated) / len(vrms_allocated) if vrms_allocated else 0
+        peak_vram = max(vrms_peak) if vrms_peak else 0
+        min_vram = min(vrms_allocated) if vrms_allocated else 0
+        
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0
+        max_latency = max(latencies) if latencies else 0
+        min_latency = min(latencies) if latencies else 0
+        
+        avg_chunks = sum(active_chunks) / len(active_chunks) if active_chunks else 0
+        avg_cache_hit = sum(cache_hits) / len(cache_hits) if cache_hits else 0
+        
         return {
-            # Perfomance
+            # Performance
             'total_turns': len(metrics),
             'session_duration_s': round(time.time() - self.start_time, 2),
             
             # VRAM
-            'avg_vram_gb': round(sum(vrms_allocated) / len(vrms_allocated), 2),
-            'peak_vram_gb': max(vrms_peak),
-            'min_vram_gb': min(vrms_allocated),
+            'avg_vram_gb': round(avg_vram, 2),
+            'peak_vram_gb': round(peak_vram, 2),
+            'min_vram_gb': round(min_vram, 2),
             
             # Latency
-            'avg_latency_ms': round(sum(latencies) / len(latencies), 2),
-            'max_latency_ms': max(latencies),
-            'min_latency_ms': min(latencies),
+            'avg_latency_ms': round(avg_latency, 2),
+            'max_latency_ms': round(max_latency, 2),
+            'min_latency_ms': round(min_latency, 2),
             
             # Chunks
-            'avg_active_chunks': round(sum(active_chunks) / len(active_chunks), 2),
+            'avg_active_chunks': round(avg_chunks, 2),
             'final_coverage': coverages[-1] if coverages else 0,
             'coverage_progression': self.coverage_history,
             
             # KV-cache
-            'avg_cache_hit_rate': round(sum(cache_hits) / len(cache_hits), 2),
+            'avg_cache_hit_rate': round(avg_cache_hit, 2),
             'final_cache_hit_rate': cache_hits[-1] if cache_hits else 0,
             
-            # Comparison
+            # Comparison with targets (защита от деления на ноль)
             'target_comparison': {
                 'vram_target': 7.5,
-                'vram_achieved': round(max(vrms_peak), 2),
-                'vram_efficiency': round((7.5 / max(vrms_peak)) * 100, 1) if vrms_peak else 0,
+                'vram_achieved': round(peak_vram, 2),
+                'vram_efficiency': round((7.5 / peak_vram) * 100, 1) if peak_vram > 0 else 0,
                 
                 'latency_target': 200,
-                'latency_achieved': round(max(latencies), 2),
-                'latency_efficiency': round((200 / max(latencies)) * 100, 1) if latencies else 0,
+                'latency_achieved': round(max_latency, 2),
+                'latency_efficiency': round((200 / max_latency) * 100, 1) if max_latency > 0 else 0,
                 
                 'coverage_target': 0.8,
                 'coverage_achieved': coverages[-1] if coverages else 0,
-                'coverage_efficiency': round((coverages[-1] / 0.8) * 100, 1) if coverages else 0
+                'coverage_efficiency': round((coverages[-1] / 0.8) * 100, 1) if coverages and coverages[-1] > 0 else 0
             }
         }
     

@@ -5,14 +5,6 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, Set
 
-#from curses import meta, tparm
-#import imp
-
-#from nt import unlink
-#from re import search
-#from socketserver import _RequestType
-#import stat
-
 import numpy as np
 import torch
 import torch.cuda
@@ -21,9 +13,6 @@ import httpx
 import logging
 import shutil
 import aiofiles
-
-#from networkx import topological_generations
-#from networkx.algorithms.community.quality import require_partition
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,18 +27,16 @@ from src.modules.retrieval.vector_store import ChromaVectorStore
 from src.modules.retrieval.chunking import SemanticChunker
 from src.modules.retrieval.document_processor import DocumentProcessor
 from src.modules.retrieval.embedder import embedding_manager, get_embeddings
-
 from src.modules.retrieval.retrieval_models import (
     DocumentHeader,
     DocumentProcessingResult,
     SessionDocumentMetadata
 )
-
 from src.modules.graph.graph_manager import KnowledgeGraphBuilder
 from src.core.scoring import HybridScorer
 from src.modules.swap.swap_manager import SwapManager
-
 from src.modules.monitoring.kv_monitor import KVCacheMonitor
+from src.modules.testing.benchmark_runner import BenchmarkRunner
 
 # ============================================================================
 # Init of app and basic services
@@ -150,7 +137,6 @@ async def lifespan(app: FastAPI):
             priority_kw_extractor_for_en="yake",
             use_gpu=False # True if GPU is requiered
         )
-
         
         logger.info("✅ KnowledgeGraphBuilder initialized")
         
@@ -175,6 +161,10 @@ async def lifespan(app: FastAPI):
         # Initialize KV Cahce Monitor
         kv_monitor = KVCacheMonitor()
         logger.info("✅ KVCacheMonitor initialized")
+
+        # Initialize KV Cahce Monitor
+        benchmark_runner = BenchmarkRunner()
+        logger.info("✅ KVCacheMonitor initialized")
         
         # Store all components in app.state
         app.state.vector_store = vector_store
@@ -184,6 +174,7 @@ async def lifespan(app: FastAPI):
         app.state.hybrid_scorer = hybrid_scorer
         app.state.swap_manager = swap_manager
         app.state.kv_monitor = kv_monitor
+        app.state.benchmark_runner = benchmark_runner
         
         # Initialize iteration tracking
         app.state.sessions = {}
@@ -1344,23 +1335,20 @@ async def list_scenarios():
 
 @app.post("/api/benchmark/run/{scenario_name}")
 async def run_benchmark(scenario_name: str, session_id: Optional[str] = None):
-    """Running an exact benchmark scenario"""
+    """Run benchmark directly using app.state components"""
     try:
-        from src.modules.testing.benchmark_runner import BenchmarkRunner
-
-        logger.info(f"Starting benchmark {scenario_name}...")
-
-        runner = BenchmarkRunner(
-            api_base=f"http://{settings['api']['host']}:{settings['api']['port']}",
-            scenarios_dir="tests/scenarios",
-            results_dir="logs/benchmarks",
-            documents_dir="tests/documents"
+        logger.info(f"Starting benchmark: {scenario_name}")
+        
+        # Use benchmark runner with app.state components
+        result = app.state.benchmark_runner.run_scenario(
+            scenario_name=scenario_name,
+            sessions=app.state.sessions,
+            document_processor=app.state.document_processor,
+            session_id=session_id
         )
-
-        result = runner.run_scenario(scenario_name, session_id)
         
         logger.info(f"✅ Benchmark completed: {scenario_name}")
-
+        
         return {
             "status": "success",
             "scenario": result['scenario'],
@@ -1368,17 +1356,13 @@ async def run_benchmark(scenario_name: str, session_id: Optional[str] = None):
             "summary": result['summary'],
             "files": {
                 "csv": result['csv_file'],
-                "json": result['json_file'],
-                "md": result['md_file']
+                "json": result['json_file']
             }
         }
-    except FileNotFoundError as e:
-        logger.error(f"❌ Scenario or document not found: {e}")
-        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"❌ Benchmark failed: {e}")
         import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
