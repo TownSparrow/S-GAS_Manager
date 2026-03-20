@@ -401,6 +401,14 @@ async def serve_web_client():
                 "/api/session/{session_id}/search",
                 "/api/session/{session_id}/chat",
                 "/api/session/{session_id}/clear",
+                "/api/session/{session_id}/info",
+                "/api/session/{session_id}/documents",
+                "/api/sgas-statistics",
+                "/benchmark",
+                "/api/benchmark/scenarios",
+                "/api/benchmark/run/{scenario_name}",
+                "/api/benchmark/generate-report/{scenario_name}",
+                "/api/benchmark/results/{scenario_name}",
                 "/health",
             ],
             "web_client": "No files in src/web/static/",
@@ -433,6 +441,21 @@ async def health_check():
         "time": datetime.now(timezone.utc).isoformat(),
         "api_version": VERSION,
     }
+
+
+@app.get("/benchmark")
+async def benchmark_ui():
+    """Serve benchmark web interface"""
+    static_benchmark = STATIC_DIR / "benchmark.html"
+    if static_benchmark.exists():
+        return FileResponse(str(static_benchmark))
+    return JSONResponse(
+        {
+            "message": "Benchmark page not found",
+            "hint": "Create src/web/static/benchmark.html"
+        },
+        status_code=404
+    )
 
 
 @app.post("/api/session/new", response_model=SessionCreateResponse)
@@ -1296,6 +1319,142 @@ async def get_sgas_statistics():
             content={"error": str(e)},
             status_code=500
         )
+
+
+@app.get("/api/benchmark/scenarios")
+async def list_scenarios():
+    """List of all available benchmark scenarios"""
+    try:
+        from src.modules.testing.scenario_loader import ScenarioLoader
+        scenario_loader = ScenarioLoader(scenarios_dir = "tests/scenarios")
+        scenarios = scenario_loader.list_available_scenarios()
+        return {
+            "status": "success",
+            "scenarios": scenarios,
+            "count": len(scenarios)
+        }
+    except Exception as e:
+        logger.error(f"❌ Failed to list scenarios: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "scenarios": []
+        }
+    
+
+@app.post("/api/benchmark/run/{scenario_name}")
+async def run_benchmark(scenario_name: str, session_id: Optional[str] = None):
+    """Running an exact benchmark scenario"""
+    try:
+        from src.modules.testing.benchmark_runner import BenchmarkRunner
+
+        logger.info(f"Starting benchmark {scenario_name}...")
+
+        runner = BenchmarkRunner(
+            api_base=f"http://{settings['api']['host']}:{settings['api']['port']}",
+            scenarios_dir="tests/scenarios",
+            results_dir="logs/benchmarks",
+            documents_dir="tests/documents"
+        )
+
+        result = runner.run_scenario(scenario_name, session_id)
+        
+        logger.info(f"✅ Benchmark completed: {scenario_name}")
+
+        return {
+            "status": "success",
+            "scenario": result['scenario'],
+            "session_id": result['session_id'],
+            "summary": result['summary'],
+            "files": {
+                "csv": result['csv_file'],
+                "json": result['json_file'],
+                "md": result['md_file']
+            }
+        }
+    except FileNotFoundError as e:
+        logger.error(f"❌ Scenario or document not found: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"❌ Benchmark failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/benchmark/generate-report/{scenario_name}")
+async def generate_report(scenario_name: str):
+    """Generating the visual report for benchmark results"""
+    try:
+        from src.modules.testing.report_generator import ReportGenerator
+        from pathlib import Path
+        
+        results_dir = Path("logs/benchmarks")
+        csv_files = list(results_dir.glob(f"{scenario_name}_*.csv"))
+        
+        if not csv_files:
+            raise HTTPException(
+                status_code=404,
+                detail=f"❌ No results found for scenario {scenario_name}"
+            )
+        
+        # Getting latest file
+        latest_csv = max(csv_files, key=lambda f: f.stat().st_mtime)
+        
+        generator = ReportGenerator(results_dir=str(results_dir))
+        plots_dir = generator.generate_plots(str(latest_csv))
+        
+        # Generating the HTML report
+        json_file = Path(str(latest_csv).replace('.csv', '.json'))
+        if json_file.exists():
+            html_file = generator.generate_html_report(str(json_file), str(plots_dir))
+            return {
+                "status": "success",
+                "html_report": html_file,
+                "plots_dir": str(plots_dir),
+                "plots": [f.name for f in plots_dir.glob("*.png")]
+            }
+        
+        return {
+            "status": "success",
+            "plots_dir": str(plots_dir),
+            "plots": [f.name for f in plots_dir.glob("*.png")]
+        }
+    except Exception as e:
+        logger.error(f"❌ Report generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/benchmark/results/{scenario_name}")
+async def get_benchmark_results(scenario_name: str):
+    """Getting latest benchmark results for a scenario"""
+    try:
+        from pathlib import Path
+        import json
+        
+        results_dir = Path("logs/benchmarks")
+        json_files = list(results_dir.glob(f"{scenario_name}_*.json"))
+        
+        if not json_files:
+            return {
+                "status": "not_found",
+                "message": f"❌ No results found for {scenario_name}"
+            }
+        
+        # Getting latest file
+        latest_json = max(json_files, key=lambda f: f.stat().st_mtime)
+        
+        with open(latest_json, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        return {
+            "status": "success",
+            "scenario": scenario_name,
+            "results": data
+        }
+    except Exception as e:
+        logger.error(f"❌ Failed to get results: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.exception_handler(HTTPException)

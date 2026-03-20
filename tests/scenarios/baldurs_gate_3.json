@@ -1,0 +1,28 @@
+{
+  "name": "baldurs_gate_3",
+  "description": "Baldur's Gate 3 lore: Shar and Selune conflict",
+  "document": "baldurs_gate_3_lore.txt",
+  "baseline_mode": false,
+  "turns": [
+    {
+      "query": "Who is Shar and what is her role in Baldur's Gate 3?",
+      "ground_truth_chunks": ["chunk_001", "chunk_002"],
+      "ground_truth_answer": "Shar is the goddess of darkness, loss, and secrets in the Forgotten Realms. In Baldur's Gate 3, she is the main antagonist who seeks to plunge the world into eternal darkness and defeat her sister Selune."
+    },
+    {
+      "query": "What is the relationship between Shar and Selune?",
+      "ground_truth_chunks": ["chunk_003", "chunk_004"],
+      "ground_truth_answer": "Shar and Selune are twin sisters and opposing deities. Shar represents darkness while Selune represents light. They are in eternal conflict, and this struggle is central to the main storyline of Baldur's Gate 3."
+    },
+    {
+      "query": "What artifacts are associated with Shar in the game?",
+      "ground_truth_chunks": ["chunk_005", "chunk_006"],
+      "ground_truth_answer": "The main artifact associated with Shar is the Netherstones, which are fragments of her power. These stones are used to control the tadpole infection and manipulate the Shadow-Cursed Lands."
+    },
+    {
+      "query": "How does the conflict between Shar and Selune affect the player's journey?",
+      "ground_truth_chunks": ["chunk_007", "chunk_008"],
+      "ground_truth_answer": "The conflict determines which deity the player aligns with, affecting available quests, companions, and the ending. Players can choose to support Shar's darkness, Selune's light, or forge their own path."
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "name": "witcher_wolf_school",
+  "description": "Witcher 3: Wolf School witchers and their abilities",
+  "document": "witcher_wolf_school.txt",
+  "baseline_mode": false,
+  "turns": [
+    {
+      "query": "What is the Wolf School of witchers and who founded it?",
+      "ground_truth_chunks": ["chunk_001", "chunk_002"],
+      "ground_truth_answer": "The Wolf School is one of the witcher schools founded by the legendary witcher Kitsu. It is located in Kaer Morhen and is known for its balanced approach to combat and alchemy. The school's symbol is a wolf's head."
+    },
+    {
+      "query": "What are the main combat styles of Wolf School witchers?",
+      "ground_truth_chunks": ["chunk_003", "chunk_004"],
+      "ground_truth_answer": "Wolf School witchers specialize in fast, agile combat with silver swords. They focus on quick strikes, dodging, and using signs effectively. Their fighting style emphasizes mobility and precision rather than brute force."
+    },
+    {
+      "query": "How does Geralt's training at the Wolf School influence his abilities?",
+      "ground_truth_chunks": ["chunk_005", "chunk_006"],
+      "ground_truth_answer": "Geralt's Wolf School training gives him exceptional reflexes, mastery of the Quen sign for defense, and proficiency with both steel and silver swords. The school's emphasis on alchemy also makes him skilled in potion and bomb crafting."
+    },
+    {
+      "query": "What is the significance of Kaer Morhen to the Wolf School?",
+      "ground_truth_chunks": ["chunk_007", "chunk_008"],
+      "ground_truth_answer": "Kaer Morhen is the fortress where Wolf School witchers are trained. It serves as both a fortress and a home for the witchers. The location is strategically important and contains ancient knowledge about mutations and combat techniques."
+    }
+  ]
+}

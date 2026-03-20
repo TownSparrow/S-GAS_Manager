@@ -1,3 +1,5 @@
+// JS for index.html
+
 class SGASWebClient {
     constructor() {
         this.apiUrl = 'http://localhost:8080';

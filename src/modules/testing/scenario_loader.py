@@ -25,7 +25,7 @@ class BenchmarkScenario:
 class ScenarioLoader:
     """ Loader scenarios from prepared JSON-files """
     
-    def __init__(self, scenarios_dir: str = "data/scenarios"):
+    def __init__(self, scenarios_dir: str = "tests/scenarios"):
         self.scenarios_dir = Path(scenarios_dir)
         if not self.scenarios_dir.exists():
             self.scenarios_dir.mkdir(parents=True, exist_ok=True)

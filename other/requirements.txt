@@ -59,10 +59,20 @@ natasha>=1.6.0
 yargy>=0.15.0
 
 # --- Keyword Extraction ---
-yake>-0.4.8
+yake>=0.4.8
 
-# --- Development (optionally) ---
-# pytest>=8.0.0
-# pytest-asyncio>=0.23.0
-# black>=24.0.0
-# isort>=5.13.0
+# --- Benchmark and Evaluation ---
+rouge-score>=0.1.2
+scipy>=1.12.0
+
+# --- Visualization and Reporting ---
+seaborn>=0.13.0
+jinja2>=3.1.0
+
+# --- Testing Framework ---
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+
+# --- Additional Metrics ---
+evaluate>=0.4.0

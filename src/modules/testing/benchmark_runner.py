@@ -15,9 +15,9 @@ class BenchmarkRunner:
     def __init__(
         self,
         api_base: str = "http://localhost:8080",
-        scenarios_dir: str = "data/scenarios",
+        scenarios_dir: str = "tests/scenarios",
         results_dir: str = "logs/benchmarks",
-        documents_dir: str = "data/documents"
+        documents_dir: str = "tests/documents"
     ):
         self.api_base = api_base
         self.scenarios_dir = Path(scenarios_dir)
