@@ -1,28 +1,268 @@
 {
-  "name": "baldurs_gate_3",
-  "description": "Baldur's Gate 3 lore: Shar and Selune conflict",
-  "document": "baldurs_gate_3_lore.txt",
+  "name": "baldurs_gate_3_benchmark",
+  "description": "Baldur's Gate 3 lore: Shar and Selune conflict — 40-turn multi-hop benchmark",
+  "document": "baldurs_gate_3_expanded_lore.txt",
   "baseline_mode": false,
+  "chunk_size": 100,
+  "chunk_overlap": 10,
   "turns": [
     {
-      "query": "Who is Shar and what is her role in Baldur's Gate 3?",
-      "ground_truth_chunks": ["chunk_001", "chunk_002"],
-      "ground_truth_answer": "Shar is the goddess of darkness, loss, and secrets in the Forgotten Realms. In Baldur's Gate 3, she is the main antagonist who seeks to plunge the world into eternal darkness and defeat her sister Selune."
+      "query": "Who is Shar and what does she govern in the Forgotten Realms?",
+      "ground_truth_chunks": ["chunk_001"],
+      "ground_truth_text": "Night Masks",
+      "ground_truth_answer": "Shar is one of the oldest deities in the Forgotten Realms, goddess of darkness, loss, secrets, and the void. Born alongside her twin Selune at the dawn of creation, she embodies the primordial void before light existed — including hidden memories, buried grief, and secrets kept at great personal cost."
     },
     {
-      "query": "What is the relationship between Shar and Selune?",
-      "ground_truth_chunks": ["chunk_003", "chunk_004"],
-      "ground_truth_answer": "Shar and Selune are twin sisters and opposing deities. Shar represents darkness while Selune represents light. They are in eternal conflict, and this struggle is central to the main storyline of Baldur's Gate 3."
+      "query": "What organisation does Shar's church use to operate across Faerun?",
+      "ground_truth_chunks": ["chunk_001"],
+      "ground_truth_text": "Night Masks",
+      "ground_truth_answer": "Shar's church operates across Faerun through the Night Masks, a secretive organisation that serves her interests in mortal society."
     },
     {
-      "query": "What artifacts are associated with Shar in the game?",
-      "ground_truth_chunks": ["chunk_005", "chunk_006"],
-      "ground_truth_answer": "The main artifact associated with Shar is the Netherstones, which are fragments of her power. These stones are used to control the tadpole infection and manipulate the Shadow-Cursed Lands."
+      "query": "What is Shar's role and plan in Baldur's Gate 3?",
+      "ground_truth_chunks": ["chunk_002"],
+      "ground_truth_text": "false deity construct",
+      "ground_truth_answer": "In Baldur's Gate 3, Shar is the ultimate antagonist. She orchestrates a scheme to extend the Shadow-Cursed Lands across all of Faerun, using the Absolute — a false deity construct — and the Netherstones to control mind flayer tadpoles implanted in key characters, including the player."
     },
     {
-      "query": "How does the conflict between Shar and Selune affect the player's journey?",
-      "ground_truth_chunks": ["chunk_007", "chunk_008"],
-      "ground_truth_answer": "The conflict determines which deity the player aligns with, affecting available quests, companions, and the ending. Players can choose to support Shar's darkness, Selune's light, or forge their own path."
+      "query": "How does Shar manipulate her followers rather than using brute force?",
+      "ground_truth_chunks": ["chunk_002", "chunk_006"],
+      "ground_truth_text": "Dark Gift",
+      "ground_truth_answer": "Shar manipulates followers through sacred oaths, memory erasure, and divine promises. She offers the Dark Gift — a numbing of all pain through forgetfulness — attracting broken, traumatised people who are too exhausted to carry their grief. She promises peace through oblivion rather than joy."
+    },
+    {
+      "query": "What mythological event started the conflict between Shar and Selune?",
+      "ground_truth_chunks": ["chunk_003"],
+      "ground_truth_text": "Mystryl",
+      "ground_truth_answer": "When the universe was young, Selune reached into primordial fire and created the sun, introducing light into a universe Shar preferred dark. Shar struck Selune in retaliation, and from that wound the goddess Mystryl — later Mystra — was born. This became a permanent, irresolvable war."
+    },
+    {
+      "query": "Why can Shar and Selune never truly destroy each other?",
+      "ground_truth_chunks": ["chunk_003"],
+      "ground_truth_text": "two sides of the same cosmic coin",
+      "ground_truth_answer": "They cannot destroy each other because they are two sides of the same cosmic coin — complementary opposites born simultaneously at the dawn of creation who forever sustain their conflict as part of the universe's fundamental structure."
+    },
+    {
+      "query": "Who is Selune and what domains does she govern?",
+      "ground_truth_chunks": ["chunk_004"],
+      "ground_truth_text": "Moonguard",
+      "ground_truth_answer": "Selune is the goddess of the moon, stars, travellers, and those who sail by night. She is Shar's twin and eternal opposite, ruling the light of stars while Shar rules the darkness between them. She represents change, hope, and the idea that light still guides from the deepest darkness."
+    },
+    {
+      "query": "What group serves Selune and what is their mission?",
+      "ground_truth_chunks": ["chunk_004"],
+      "ground_truth_text": "fight undead",
+      "ground_truth_answer": "Selune's clergy, the Moonguard, are sworn to protect travellers, fight undead, and bring hope to the lost. Their mission reflects Selune's domains of guidance, protection, and revelation."
+    },
+    {
+      "query": "What physical effects has the Shar-Selune conflict left on Faerun?",
+      "ground_truth_chunks": ["chunk_005", "chunk_036"],
+      "ground_truth_text": "stonework from two distinct eras",
+      "ground_truth_answer": "The conflict has shaped entire regions: the Shadow-Cursed Lands are the most visible scar, with empty villages, blackened crops, and creatures transformed into shadow creatures. Faerun's landscape bears archaeological layers showing Selunite prosperity before the curse and post-curse abandonment — scorched altars, ruined fields, homes dissolved into shadow matter."
+    },
+    {
+      "query": "Why does Shar's doctrine attract followers who are suffering?",
+      "ground_truth_chunks": ["chunk_006"],
+      "ground_truth_text": "Dark Gift",
+      "ground_truth_answer": "Shar promises peace through forgetfulness: suffering you cannot recall cannot hurt you. She attracts broken people, traumatised soldiers, and those exhausted by grief, offering the Dark Gift — a quiet oblivion, a numbing of all pain. Her followers consider it mercy rather than a curse, and she does not demand joy, only surrender."
+    },
+    {
+      "query": "What are the Netherstones and what power do they hold?",
+      "ground_truth_chunks": ["chunk_007"],
+      "ground_truth_text": "Crown of Karsus",
+      "ground_truth_answer": "The Netherstones are three sacred artifacts carved from the Shadowfell and infused with Shar's divine essence, each linked to a domain: mind, shadow, and void. Together they form the Crown of Karsus. They can control all mind flayer tadpoles simultaneously, and whoever assembles all three gains dominion over the True Soul network."
+    },
+    {
+      "query": "Who are the three generals who held the Netherstones?",
+      "ground_truth_chunks": ["chunk_008"],
+      "ground_truth_text": "Enver Gortash",
+      "ground_truth_answer": "The three Netherstones were held by Ketheric Thorm, Enver Gortash, and Orin the Red — three generals of the Absolute, each controlling a different aspect of its operations. Ketheric, resurrected under a pact with Shar, maintained the Shadow-Cursed Lands from Moonrise Towers."
+    },
+    {
+      "query": "What powers do mind flayer tadpoles grant and what are the risks?",
+      "ground_truth_chunks": ["chunk_009", "chunk_028"],
+      "ground_truth_text": "psionic ability",
+      "ground_truth_answer": "Tadpoles grant illithid powers — telepathy, domination, and psionic ability — which grow as the player embraces the infection. However, they slowly transform hosts into mind flayers and erode personality. The tension is using this power while risking becoming the very monster you're fighting, mirroring the choice between Shar's easy dark power and harder paths that preserve integrity."
+    },
+    {
+      "query": "What created the Shadow-Cursed Lands and what sustains them?",
+      "ground_truth_chunks": ["chunk_010", "chunk_008"],
+      "ground_truth_text": "seed of the curse",
+      "ground_truth_answer": "The Shadow-Cursed Lands were created when Ketheric Thorm made his pact with Shar after losing his daughter Isobel; his grief became the seed of the curse. The Netherstones act as anchors of dark magic sustaining the region. The darkness carries spiritual weight, draining will and corrupting minds, and creatures caught without protection transform into shadow creatures."
+    },
+    {
+      "query": "How do players travel safely through the Shadow-Cursed Lands?",
+      "ground_truth_chunks": ["chunk_010", "chunk_019"],
+      "ground_truth_text": "Isobel's blessing",
+      "ground_truth_answer": "Players must carry a Moon Lantern — obtained from githyanki patrols or Last Light Inn — or travel under Isobel's blessing. The Moon Lantern projects Selune's light, negating shadow creature transformations. Without it, characters suffer the blinded condition: attack disadvantage, failed skill checks, near-zero perception."
+    },
+    {
+      "query": "How does Act Two use the Shar-Selune conflict in its narrative structure?",
+      "ground_truth_chunks": ["chunk_011"],
+      "ground_truth_text": "the missing Selunite artifact she carries",
+      "ground_truth_answer": "Act Two takes place almost entirely within the Shadow-Cursed Lands and brings the conflict to the forefront through Ketheric Thorm's history and the operational base at Moonrise Towers. It forces players to confront that embracing Shar's darkness is always tempting because the power is real, but the cost is measured in souls, memories, and freedom."
+    },
+    {
+      "query": "What was Moonrise Towers before Shar's takeover?",
+      "ground_truth_chunks": ["chunk_012"],
+      "ground_truth_text": "lunar cycles",
+      "ground_truth_answer": "Moonrise Towers was originally a watchtower maintained by Selunite monks who used it to observe lunar cycles and chart the heavens. After Ketheric Thorm's fall and resurrection under Shar's pact, it was seized and repurposed as a prison and staging ground for the Absolute, with hundreds of True Souls congregating there."
+    },
+    {
+      "query": "What is Ketheric Thorm's background and how did he fall to Shar?",
+      "ground_truth_chunks": ["chunk_013"],
+      "ground_truth_text": "cautionary tale about grief",
+      "ground_truth_answer": "Ketheric Thorm was once a Selunite paladin of extraordinary devotion. He turned to Shar only after losing everything, including his daughter Isobel. His arc is a cautionary tale about grief weaponised by a goddess of loss who profits from despair — he went from Selune's most devoted to Shar's immortal champion through the power of unchecked mourning."
+    },
+    {
+      "query": "What is the Druid's Grove and what does it represent?",
+      "ground_truth_chunks": ["chunk_014"],
+      "ground_truth_text": "Tiefling refugees",
+      "ground_truth_answer": "The Druid's Grove in Act One is a magically warded sanctuary home to druids, Tiefling refugees, and adventurers. It represents Selune's quiet sanctuary against encroaching darkness. The conflict at the Grove — whether to seal it out of self-preservation or remain open to refugees — mirrors the larger divine war between isolationist fear and communal hope."
+    },
+    {
+      "query": "What is Shadowheart carrying and why is it ironic?",
+      "ground_truth_chunks": ["chunk_015"],
+      "ground_truth_text": "Mysterious Artefact",
+      "ground_truth_answer": "Shadowheart carries the Mysterious Artefact — a powerful Selunite holy relic — that she was tasked with delivering to Moonrise Towers for Shar. The irony is that a Sharran cleric is carrying a Selunite artifact into Shar's stronghold, with her memories erased to ensure compliance. The Grove's Selunite atmosphere unsettles her and triggers half-memories she cannot explain."
+    },
+    {
+      "query": "What is Shadowheart's pivotal choice in Act Three?",
+      "ground_truth_chunks": ["chunk_016"],
+      "ground_truth_text": "biological parents",
+      "ground_truth_answer": "Shadowheart must decide whether to execute her biological parents — Selunite worshippers imprisoned by Shar's clergy — as Shar demands, or free them and renounce her goddess. This moment crystallises the game's central theme: identity is not what you were made to be, but what you choose to be. The outcome depends on choices made throughout the entire game."
+    },
+    {
+      "query": "What happens if Shadowheart remains loyal to Shar at the end?",
+      "ground_truth_chunks": ["chunk_017"],
+      "ground_truth_text": "Spear of Night",
+      "ground_truth_answer": "She becomes Shar's Dark Justiciar — a divine assassin with shadow magic who receives the Spear of Night. The ending is haunting because it is not forced: she knows her full past and still chooses darkness willingly. Shar rewards compliance with real power, and the surrender is informed, making it more troubling than a simple villain's fall."
+    },
+    {
+      "query": "What happens when Shadowheart chooses Selune?",
+      "ground_truth_chunks": ["chunk_018"],
+      "ground_truth_text": "Jenevelle Hallowleaf",
+      "ground_truth_answer": "She becomes a Paladin of Selune — her shadow magic replaced by radiant moonlight. She remembers her true identity as Jenevelle Hallowleaf, a Selunite acolyte raised with love and faith. Her parents are freed, and she undergoes a spiritual homecoming. She sacrifices the Spear of Night but gains healing and radiant abilities that counteract Shar's magic."
+    },
+    {
+      "query": "What mechanical penalties exist in Shar's darkened areas?",
+      "ground_truth_chunks": ["chunk_019", "chunk_020"],
+      "ground_truth_text": "blinded condition",
+      "ground_truth_answer": "Characters without darkvision or a Moon Lantern suffer the blinded condition: attacks have disadvantage, skill checks fail more often, and perception drops to near zero. Shadow creatures further AI-prioritise dragging characters away from light sources, and they can create additional shadow creatures from fallen enemies, multiplying dangerously without area-clearing capabilities."
+    },
+    {
+      "query": "What are shadow creatures and how are they defeated?",
+      "ground_truth_chunks": ["chunk_020"],
+      "ground_truth_text": "necrotic damage",
+      "ground_truth_answer": "Shadow creatures are former living beings — villagers, soldiers, animals — consumed by the curse and transformed into darkness manifestations. They deal necrotic damage, drain strength, and multiply from fallen enemies. Defeating them requires radiant damage, fire spells, or maintaining strong Moon Lantern coverage over the battlefield."
+    },
+    {
+      "query": "How do different companions react to using Netherstone power?",
+      "ground_truth_chunks": ["chunk_021", "chunk_029"],
+      "ground_truth_text": "Wyll and Karlach",
+      "ground_truth_answer": "Lae'zel sees it as pragmatic power use. Astarion approves — power is power. Shadowheart (if Sharran) approves as it aligns with Shar's goals. But Wyll and Karlach become increasingly uncomfortable. Each illithid ability used feels like a small bargain, and the game uses mechanical progression to reflect ideological corruption, shifting available ending options toward Shar-aligned paths."
+    },
+    {
+      "query": "Who is Shadowheart in her true identity and how was she remade?",
+      "ground_truth_chunks": ["chunk_022"],
+      "ground_truth_text": "Rite of Thorns",
+      "ground_truth_answer": "Shadowheart was born Jenevelle Hallowleaf to Selunite parents. She was taken by Shar's clergy as a child and subjected to the Rite of Thorns — a dark ritual that erased her memories. She was remade as a Sharran cleric, indoctrinated with devotion to the Dark Lady, and given a mission. She is simultaneously a victim of Shar's manipulation and an active agent of it."
+    },
+    {
+      "query": "How is Halsin connected to the Shadow-Cursed Lands and Shar's conflict?",
+      "ground_truth_chunks": ["chunk_023"],
+      "ground_truth_text": "over a century",
+      "ground_truth_answer": "Halsin was directly traumatised by the Shadow-Cursed Lands, trapped in Moonrise Towers for over a century. He carries deep hatred for Ketheric Thorm and what Shar's curse did to the Underdark ecosystem beneath the blighted lands. His questline — lifting the shadow curse — requires confronting a trapped spirit, freeing a child, and purging the land so moonlight can return."
+    },
+    {
+      "query": "What are the key decision points that shape Baldur's Gate 3's ending?",
+      "ground_truth_chunks": ["chunk_024"],
+      "ground_truth_text": "Blood of Lathander",
+      "ground_truth_answer": "Key decisions include: whether to use Netherstone power at all, whether to forge the Blood of Lathander weapon, whether to allow Shadowheart to kill her parents, and whether to destroy or control the Elder Brain. The game tracks hundreds of variables across all three acts — companion approval, quest states, alliance choices — to produce a branching endgame that avoids a single good ending."
+    },
+    {
+      "query": "What do the different ending variants look like based on Shar vs Selune alignment?",
+      "ground_truth_chunks": ["chunk_025"],
+      "ground_truth_text": "full light ending",
+      "ground_truth_answer": "The full light ending sees Shadowheart choose Selune, the shadow curse lifted, and Isobel and Aylin reunited. The full darkness ending sees Shadowheart become Dark Justiciar and the player dominate the illithid network. Most players experience moral ambiguity between these poles. The epilogue shows long-term consequences per choice, with different regions recovering or deteriorating based on accumulated decisions."
+    },
+    {
+      "query": "How is Shar defeated if she never appears in physical form?",
+      "ground_truth_chunks": ["chunk_026"],
+      "ground_truth_text": "chosen champion",
+      "ground_truth_answer": "Shar is defeated by dismantling her agents and artifacts across all three acts rather than a single battle. In Act Two, destroying Ketheric Thorm breaks the shadow curse anchor. In Act Three, confronting the Elder Brain and choosing whether to destroy or control it removes the Netherstone-based dominion. Shar operates through intermediaries, making her a more insidious antagonist — present in every choice her followers make."
+    },
+    {
+      "query": "How is Selune's light restored to the Shadow-Cursed Lands?",
+      "ground_truth_chunks": ["chunk_027"],
+      "ground_truth_text": "nightsong",
+      "ground_truth_answer": "Selune's light is restored by freeing Aylin — the immortal nightsong and daughter of Selune — from Ketheric's ritual chamber. Her freedom breaks Ketheric's immortality, allowing him to be defeated. When Aylin flies into the sky, her radiance pushes back the shadow curse in real time: the black sky lightens, shadow creatures dissolve, and moonlight returns to the ravaged landscape for the first time in over a hundred years."
+    },
+    {
+      "query": "How does the tadpole infection mirror the Shar-Selune thematic choice?",
+      "ground_truth_chunks": ["chunk_028"],
+      "ground_truth_text": "narrative engine",
+      "ground_truth_answer": "Like Shar's dark doctrine, the tadpole offers easy power at the cost of something essential — your identity and alignment. Using illithid powers is tempting and effective, but it mirrors choosing Shar's darkness: convenient shortcuts that erode who you are. Resisting the infection mirrors Selune's harder path of self-determination and hope, preserving integrity at the cost of power."
+    },
+    {
+      "query": "How does Shar's doctrine of secrecy explain Shadowheart's emotional distance?",
+      "ground_truth_chunks": ["chunk_031"],
+      "ground_truth_text": "truth is a form of vulnerability",
+      "ground_truth_answer": "Shar's theology holds that truth is a form of vulnerability and revealing yourself gives others power over you. Her followers — Dark Justicars, Night Masks, acolytes — are forbidden from revealing their faith. Shadowheart's cover as a Selunite cleric is itself an act of worship to Shar. She was taught that intimacy is weakness, which explains her difficulty forming genuine bonds with the party."
+    },
+    {
+      "query": "How does Shar harvest divine power and how does Ketheric Thorm illustrate this?",
+      "ground_truth_chunks": ["chunk_032"],
+      "ground_truth_text": "orchestrates loss",
+      "ground_truth_answer": "Shar feeds on grief rather than simple prayer. She orchestrates loss deliberately, because prolonged mourning generates perpetual divine sustenance. Ketheric Thorm is the perfect example: his endless grief for Isobel became the seed of the shadow curse. Shar transformed his love into fuel for her agenda — she weaponised his mourning into a force of regional destruction, not by accident but as deliberate harvest."
+    },
+    {
+      "query": "How does Selune's navigation domain appear in the game world?",
+      "ground_truth_chunks": ["chunk_033"],
+      "ground_truth_text": "Survival checks",
+      "ground_truth_answer": "Sailors in Baldur's Gate carry Selunite medallions for protection. Characters with Selunite backgrounds receive Survival bonuses at night. Stars serve as an orientational system in the Underdark. Her followers believe every lost traveller who finds a star receives Selune's direct blessing. Navigation is not just literal but metaphorical — hope as a principle for souls lost in darkness."
+    },
+    {
+      "query": "What is the mechanical contrast between Shar's and Selune's spell toolkit?",
+      "ground_truth_chunks": ["chunk_034"],
+      "ground_truth_text": "Light cantrip",
+      "ground_truth_answer": "Shar's magic steals and drains — necrotic damage, strength drain, shadow propagation. Selune's magic restores and reveals — radiant damage, healing spells, light cantrips. When Shadowheart chooses Selune she gains healing and radiant spells that directly counteract Shar's toolkit. The Light cantrip is treated narratively as a small invocation of Selune's domain. The mechanical contrast mirrors the thematic opposition."
+    },
+    {
+      "query": "Why does the divine conflict between Shar and Selune never reach resolution?",
+      "ground_truth_chunks": ["chunk_035"],
+      "ground_truth_text": "Spellplague",
+      "ground_truth_answer": "Both goddesses have existed since before the current age of gods, surviving the Time of Troubles, the Spellplague, and numerous divine wars. Their conflict has outlasted civilisations, continents, and pantheons. The player's intervention shifts the balance temporarily — lifting the curse, freeing Aylin — but Shar still exists. The ending is not about defeating darkness permanently; it's about choosing which side you stand with in an eternal struggle."
+    },
+    {
+      "query": "What archaeological evidence of the Shar-Selune conflict exists in Faerun's ruins?",
+      "ground_truth_chunks": ["chunk_036"],
+      "ground_truth_text": "stonework from two distinct eras",
+      "ground_truth_answer": "Ruins throughout the Shadow-Cursed Lands show stonework from two distinct eras: Selunite prosperity before the curse and post-curse abandonment. Scorched and overturned Selunite altars, blackened fields, and homes dissolved into shadow matter layer the history. The Moonrise Towers themselves were built by Selunite monks before being seized. The Underdark has passages where Shar's influence drove out all bioluminescence, leaving ancient drow settlements lightless."
+    },
+    {
+      "query": "What magical items help players fight in Shar's darkness-affected areas?",
+      "ground_truth_chunks": ["chunk_037"],
+      "ground_truth_text": "Coruscating Ring",
+      "ground_truth_answer": "The Moon Lantern is the primary tool, casting Selune's radiant aura. Players can also use Light, Dancing Lights, Faerie Fire, and Daylight spells. Fire-based spells produce both damage and light. Selune's Spear, the Devotee's Mace, and the Coruscating Ring all provide radiant output. Managing light sources becomes a core tactical element in shadow-heavy encounters."
+    },
+    {
+      "query": "Which races have an innate advantage in Shadow-Cursed Lands and why?",
+      "ground_truth_chunks": ["chunk_038"],
+      "ground_truth_text": "60 feet of darkvision",
+      "ground_truth_answer": "Races with innate darkvision — drow, dwarves, half-orcs, tieflings, and gnomes — can see in magical darkness without suffering the blinded condition. Shadowheart as a half-elf has 60 feet of darkvision, making her suited to Shar's domains despite serving the goddess. Humans and halflings lack darkvision and must compensate through equipment or spells, reinforcing the thematic point that comfort in darkness can be a trap."
+    },
+    {
+      "query": "What is the Gauntlet of Shar and what does completing it unlock?",
+      "ground_truth_chunks": ["chunk_039"],
+      "ground_truth_text": "Gauntlet of Shar",
+      "ground_truth_answer": "The Gauntlet of Shar is a dungeon requiring stealth and misdirection: players navigate shadow without triggering light-based traps, assassinate targets covertly, and retrieve artifacts through subterfuge. It punishes brute force and rewards patience, contrasting with Selunite revelation quests. Completing it unlocks the Spear of Night — Shar's divine weapon — and advances Shadowheart's quest toward its dark resolution."
+    },
+    {
+      "query": "What structural pattern do Selune-aligned quests follow and what examples illustrate it?",
+      "ground_truth_chunks": ["chunk_040"],
+      "ground_truth_text": "imprisoned pixies",
+      "ground_truth_answer": "Selune's quests follow a structural pattern: something precious has been hidden or imprisoned by darkness and must be found, restored, and allowed to shine. Examples include freeing Aylin from Ketheric's ritual, protecting Isobel at Last Light Inn, freeing imprisoned pixies from Moon Lanterns, and uncovering Shadowheart's true identity. Each quest is an act of revelation — bringing hidden truth into light."
     }
   ]
 }

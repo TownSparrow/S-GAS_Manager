@@ -45,8 +45,8 @@ pip install vllm
 
 # 6. Installing of the dependences
 echo "6) Installation of dependence form requirements.txt..."
-if [ -f "other/requirements.txt" ]; then
-    pip install -r other/requirements.txt
+if [ -f "requirements.txt" ]; then
+    pip install -r requirements.txt
 else
     echo "❌ File requirements.txt is not detected"
     exit 1
@@ -96,8 +96,8 @@ echo ""
 echo "✅ Installation is completed!"
 echo ""
 echo "Next steps:"
-echo "   1. Set the params in configs/system_params.json"
+echo "   1. Set the params in cfg/system_params.json"
 echo "   2. Activate environment: source S-GAS_Manager_env/bin/activate"
 echo "   3. Launch vLLM server: ./scripts/start_vllm_server.sh"
-echo "   4. Launch API: python src/web/api.py"
+echo "   4. Launch API: uvicorn run:app --reload --host 0.0.0.0 --port 8080"
 echo ""

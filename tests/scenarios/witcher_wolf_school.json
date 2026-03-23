@@ -3,6 +3,8 @@
   "description": "Witcher 3: Wolf School witchers and their abilities",
   "document": "witcher_wolf_school.txt",
   "baseline_mode": false,
+  "chunk_size": 100,
+  "chunk_overlap": 10,
   "turns": [
     {
       "query": "What is the Wolf School of witchers and who founded it?",

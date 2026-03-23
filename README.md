@@ -2,7 +2,7 @@
 [RU Version of README](https://github.com/TownSparrow/S-GAS_Manager/blob/main/README_ru.md)
 
 ## ⚠️ WARNING! ⚠️
-Current version is `v0.1.0-alpha.1`. Project is in development process! I don't recommend to use it in production-tasks yet!
+Current version is `v0.1.0-alpha.2`. Project is in development process! I don't recommend to use it in production-tasks yet!
 
 ## About the project
 This project is a prototype system that applies an adaptive data distribution algorithm with semantic-graph scoring of text fragments (chunks) when working with small language models (SLM). It allows language models with Retrieval-Augmented Generation (RAG) capabilities to handle large contexts by adaptively swapping chunks between GPU memory and system RAM. The system applies a semantic-graph evaluation of the value of each text fragment before every request in order to dynamically manage information on consumer-grade hardware.
@@ -54,7 +54,7 @@ chmod +x ./scripts/install_env.sh
 ```
 
 ### System launch
-1. Check the configuration file and adjust runtime parameters in `configs/system_params.json` if needed.
+1. Check the configuration file and adjust runtime parameters in `cfg/system_params.json` if needed.
 2. In the project root directory, open a terminal and run the launch script:
 ```bash
 chmod +x ./scripts/start_vllm_server.sh
@@ -64,7 +64,7 @@ chmod +x ./scripts/start_vllm_server.sh
 4. In the project root directory, open an additional terminal (without closing the previous one) and start the local API server:
 ```bash
 source S-GAS_Manager_env/bin/activate
-uvicorn src.web.api:app --reload --host 0.0.0.0 --port 8080
+uvicorn run:app --reload --host 0.0.0.0 --port 8080
 ```
 5. After the API is successfully started, open the system page in your browser: **http://localhost:8080**
 
@@ -91,45 +91,34 @@ uvicorn src.web.api:app --reload --host 0.0.0.0 --port 8080
 |----------|---------|
 | vLLM does not start | Check CUDA support: `nvidia-smi` |
 | API does not respond | Make sure vLLM is using the correct port (8000) |
-| GPU out-of-memory | Decreese `gpu_memory_utilization` in `configs/system_params.json` |
+| GPU out-of-memory | Decreese `gpu_memory_utilization` in `cfg/system_params.json` |
 | Graph is not built | Ensure the correct version of spaCy model is installed: `python -m spacy download ru_core_news_sm` (for Russian) |
 
 ## Architecture of system
 ```
 S-GAS_MANAGER/
-├── src/
-│   ├── core/
-│   │   └── scoring.py                # Core: semantic-graph scoring of text fragments
-│   ├── modules/
-│   │   ├── retrieval/
-│   │   │   ├── chunking.py           # Splitting text into semantic chunks
-│   │   │   ├── document_loader.py    # Document loading and initialization
-│   │   │   ├── document_processor.py # Preprocessing of text
-│   │   │   ├── embedder.py           # Converting text into embeddings
-│   │   │   ├── vector_store.py       # Interaction with ChromaDB
-│   │   │   └── retrieval_models.py   # Data models for RAG modules
-│   │   ├── graph/
-│   │   │   └── graph_builder.py      # Knowledge graph construction and entity extraction
-│   │   └── swap/
-│   │       └── swap_manager.py       # Data swapping manager 
-│   ├── web/
-│   │   ├── api.py                    # FastAPI REST endpoints
-│   │   └── static/
-│   │       ├── index.html            # Main web client page
-│   │       ├── styles.css            # Web client styles
-│   │       └── script.js             # Web client logic
-│   ├── config.py                     # Configuration deserialization
-│   └── main.py                       # Test script for startup validation
-├── configs/
-│   └── system_params.json            # System runtime parameters (model, GPU mem, batch size, etc.)
+├── run.py                            # Entry point: DI wiring, FastAPI routes, startup
+├── config.py                         # Configuration loading from JSON
+├── requirements.txt                  # Main dependencies
+├── requirements_dev.txt              # Development dependencies
+├── app/
+│   ├── consts/                       # Constants and prompt templates
+│   ├── models/                       # Data models (Chunk, Document, Session, API schemas)
+│   ├── interfaces/                   # Service interfaces (contracts)
+│   ├── services/                     # Business logic (Embedding, VectorStore, Graph, Scoring, Swap, Chat)
+│   │   ├── _processors/             # NER and keyword extraction processors
+│   │   ├── monitoring/              # KV-cache monitoring
+│   │   └── testing/                 # Benchmark runner, metrics, evaluators
+│   ├── controllers/                  # Thin HTTP handlers (Session, Document, Search, Chat, Benchmark)
+│   ├── loaders/                      # Document loaders (PDF, Text, DOCX)
+│   └── utils/                        # Utilities (GPU, serialization, validation)
+├── cfg/
+│   └── system_params.json            # System runtime parameters
+├── static/                           # Web client (HTML, CSS, JS)
 ├── scripts/
 │   ├── install_env.sh                # Automatic dependency installation
 │   └── start_vllm_server.sh          # vLLM server startup
-├── logs/
-│   └── session_metrics.jsonl         # Per-session metrics logging
-├── other/
-│   ├── requirements.txt              # Main dependencies
-│   └── requirements_dev.txt          # Development dependencies
+├── logs/                             # Per-session metrics logging
 └── data/                             # Document and embedding storage (created automatically)
 
 ```

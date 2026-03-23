@@ -3,6 +3,8 @@
   "description": "Technical aspects of game development: engines and optimization",
   "document": "game_dev_technical.txt",
   "baseline_mode": false,
+  "chunk_size": 100,
+  "chunk_overlap": 10,
   "turns": [
     {
       "query": "What are the main differences between Unity and Unreal Engine?",

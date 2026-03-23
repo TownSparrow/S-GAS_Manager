@@ -17,7 +17,7 @@ export VLLM_ATTENTION_BACKEND=FLASH_ATTN
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Checking config file
-CONFIG="configs/system_params.json"
+CONFIG="cfg/system_params.json"
 if [ ! -f "$CONFIG" ]; then
     echo "❌ Config file is not dectected: $CONFIG"
     exit 1
@@ -67,5 +67,4 @@ vllm serve "$MODEL" \
   --quantization "$QUANT" \
   --dtype "$DTYPE" \
   --trust-remote-code \
-  --download-dir models/ \
-  --disable-log-requests
+  --download-dir models/

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S-GAS Benchmark</title>
+    <link rel="stylesheet" href="/static/css/benchmark.css">
+</head>
+<body>
+    <div class="container">
+        <h1>S-GAS Benchmark</h1>
+        
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('scenarios', this)">Scenarios</div>
+            <div class="tab" onclick="switchTab('results', this)">Results</div>
+            <div class="tab" onclick="switchTab('reports', this)">Reports</div>
+        </div>
+        
+        <div id="scenarios-tab" class="tab-content active">
+            <h2>Available Scenarios</h2>
+            <div id="scenarios-list">
+                <div class="status info">Loading scenarios...</div>
+            </div>
+            
+            <div id="progress-section" style="display:none;">
+                <h2>Progress</h2>
+                <div class="progress">
+                    <div id="progress-bar" class="progress-bar" style="width: 0%;">0%</div>
+                </div>
+                <div id="progress-info" class="status info">Starting benchmark...</div>
+            </div>
+        </div>
+        
+        <div id="results-tab" class="tab-content">
+            <h2>Latest Results</h2>
+            <div id="results-content">
+                <div class="status info">No results yet. Run a benchmark first.</div>
+            </div>
+        </div>
+        
+        <div id="reports-tab" class="tab-content">
+            <h2>Visual Reports</h2>
+            <div id="reports-content">
+                <div class="status info">No reports generated yet.</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/benchmark.js"></script>
+</body>
+</html>
