@@ -31,7 +31,7 @@ class Settings:
 
     def _get_default_config(self) -> dict:
         return {
-            "vllm": {"model_name": "Qwen/Qwen3-8B-AWQ", "gpu_memory_utilization": 0.8, "max_model_len": 4096, "api_base": "http://localhost:8000/v1", "temperature": 0.7, "top_p": 0.9, "max_tokens": 256},
+            "vllm": {"model_name": "Qwen/Qwen3-8B-AWQ", "gpu_memory_utilization": 0.8, "max_model_len": 8192, "api_base": "http://localhost:8000/v1", "temperature": 0.7, "top_p": 0.9, "max_tokens": 2048},
             "embeddings": {"model": "sentence-transformers/all-MiniLM-L6-v2", "similarity_metric": "cosine"},
             "rag": {"top_k": 5},
             "chunking": {"max_chunk_size": 512, "overlap_size": 50},

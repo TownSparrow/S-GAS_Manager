@@ -12,9 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingService(IEmbeddingService):
-    """
-    Embedding service with local model (primary) and optional API fallback.
-    """
+    """Embedding service with local model (primary) and optional API fallback."""
 
     def __init__(self, model_name: str, api_base: str, embedding_api_url: str = ""):
         self._model_name = model_name
@@ -51,16 +49,32 @@ class EmbeddingService(IEmbeddingService):
             raise RuntimeError("Local embedding model not loaded")
         return self._local_model.encode(texts, convert_to_numpy=True)
 
+    def clear_cache(self) -> None:
+        """TODO: SentenceTransformer has no external cache to clear. Think about way to clear it."""
+
     def get_embeddings(self, texts: List[str]) -> np.ndarray:
         if not texts:
             return np.array([])
+
+        # Auto-recover: if the model was lost (e.g. CUDA context died), reload it
+        if self._local_model is None:
+            logger.warning("Embedding model is None, attempting to reload...")
+            self._load_local_model()
 
         # Primary: local model (fast, no network overhead)
         if self._local_model is not None:
             try:
                 return self._get_embeddings_local(texts)
             except Exception as e:
-                logger.warning(f"Local embedding failed: {e}")
+                logger.error(f"Local embedding failed on GPU: {e}")
+                # Retry on CPU if GPU failed (e.g. OOM, CUDA context lost)
+                try:
+                    logger.info("Reloading embedding model on CPU...")
+                    self._local_model = SentenceTransformer(self._model_name, device='cpu')
+                    return self._get_embeddings_local(texts)
+                except Exception as e2:
+                    logger.error(f"CPU embedding retry also failed: {e2}")
+                    self._local_model = None
 
         # Fallback: API (only if explicitly configured)
         if self._api_available:

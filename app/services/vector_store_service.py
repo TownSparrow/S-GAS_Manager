@@ -95,10 +95,14 @@ class ChromaVectorStoreService(IVectorStore):
             if not results['ids']:
                 return []
             chunks = []
-            embeddings_list = results.get('embeddings') or []
-            has_embeddings = isinstance(embeddings_list, list) and len(embeddings_list) > 0
+            embeddings_raw = results.get('embeddings')
+            # ChromaDB may return embeddings as list, numpy array, or None.
+            # Use len() safely to detect presence regardless of container type.
+            has_embeddings = embeddings_raw is not None and len(embeddings_raw) > 0
             for i in range(len(results['ids'])):
-                embedding = np.array(embeddings_list[i]) if has_embeddings and i < len(embeddings_list) else None
+                embedding = None
+                if has_embeddings and i < len(embeddings_raw):
+                    embedding = np.array(embeddings_raw[i], dtype=np.float32)
                 chunks.append({'id': results['ids'][i], 'text': results['documents'][i], 'metadata': results['metadatas'][i], 'embedding': embedding})
             return chunks
         except Exception as e:

@@ -6,11 +6,8 @@ from app.services._processors.base_processor import ProcessorInterface
 logger = logging.getLogger(__name__)
 
 class KeywordYakeProcessor(ProcessorInterface):
-    """
-    A keyword extraction processor using YAKE.
-    """
-    def __init__(self, lang_code: str = 'en', num_keywords: int = 20):
-
+    """A keyword extraction processor using YAKE."""
+    def __init__(self, lang_code: str = 'en', num_keywords: int = 10):
         self.yake_extractor = yake.KeywordExtractor(
             lan=lang_code,
             n=2, # bigrams
@@ -22,11 +19,7 @@ class KeywordYakeProcessor(ProcessorInterface):
         logger.info(f"KeywordYakeProcessor initialized for language: {lang_code}")
 
     def process(self, text: str, morph_analyzer=None) -> List[Dict[str, Any]]:
-        """
-        Extracts keywords from text using YAKE.
-        Accepts morph_analyzer as an argument to avoid binding to a specific instance in __init__.
-        Returns a list of dictionaries with keys 'word', 'label', 'type', 'score'.
-        """
+        """Extracting keywords from text using YAKE."""
         keywords_raw = self.yake_extractor.extract_keywords(text)
         # keywords_raw = [(keyword, score), ...]
         keywords = []

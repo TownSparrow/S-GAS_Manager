@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S-GAS Knowledge Graph</title>
+    <link rel="stylesheet" href="/static/css/graph.css">
+</head>
+<body>
+
+<header>
+    <h1>S-GAS · Knowledge Graph</h1>
+    <div id="stats-bar">
+        <div class="stat-item">Nodes: <span id="stat-nodes">—</span></div>
+        <div class="stat-item">Edges: <span id="stat-edges">—</span></div>
+        <div class="stat-item">Chunks: <span id="stat-chunks">—</span></div>
+        <div class="stat-item">Concepts: <span id="stat-concepts">—</span></div>
+    </div>
+    <div id="controls">
+        <div id="legend">
+            <span><span class="legend-dot chunk-dot"></span>Chunk</span>
+            <span><span class="legend-dot concept-dot"></span>Concept</span>
+            <span class="legend-link semantic-label">- -&nbsp;semantic</span>
+            <span class="legend-link common-label">&#8212;&nbsp;shared concept</span>
+        </div>
+        <button onclick="loadGraph()">&#8635; Refresh</button>
+        <button onclick="resetZoom()">&#8635; Fit</button>
+        <a href="/benchmark"><button>&#8592; Benchmark</button></a>
+    </div>
+</header>
+
+<div id="main">
+    <div id="canvas-wrap">
+        <div id="loading">Loading graph data&#8230;</div>
+        <div id="error-msg"></div>
+        <svg id="graph-svg">
+            <defs>
+                <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                    <path d="M0,0 L0,6 L6,3 z" class="arrow-head"/>
+                </marker>
+            </defs>
+            <g id="root"></g>
+        </svg>
+    </div>
+    <div id="info-panel">
+        <h3>Node detail</h3>
+        <div id="node-detail"><span class="empty-hint">Click a node to inspect it.</span></div>
+    </div>
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="/static/js/graph.js"></script>
+</body>
+</html>

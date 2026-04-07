@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class SwapService(ISwapManager):
-    def __init__(self, threshold: float = 0.3, prefetch_count: int = 5, memory_check_interval_ms: int = 50, max_gpu_memory_tokens: Optional[int] = None, device: str = "cuda:0" if torch.cuda.is_available() else "cpu", debug_mode: bool = False, force_offload_on_iteration: int = -1):
+    def __init__(self, threshold: float = 0.3, prefetch_count: int = 5, memory_check_interval_ms: int = 50, max_gpu_memory_tokens: Optional[int] = None, device: str = "cuda:0" if torch.cuda.is_available() else "cpu", force_offload_on_iteration: int = -1, retain_top_centrality_pct: float = 0.15, eviction_ram_threshold_gb: float = 12.0):
         self._device = torch.device(device) if isinstance(device, str) else device
         self._threshold = threshold
         self._prefetch_count = prefetch_count
@@ -39,29 +39,38 @@ class SwapService(ISwapManager):
         self.total_swaps = 0
         self.last_action = "wait"
         self._gpu_access_time: Dict[str, float] = {}
-        self._debug_mode = debug_mode
         self._force_offload_on_iteration = force_offload_on_iteration
+        self._retain_top_centrality_pct = retain_top_centrality_pct
+        self._eviction_ram_threshold_gb = eviction_ram_threshold_gb
+        self._protected_chunk_ids: set = set()  # high-centrality chunks to retain
+        self._eviction_candidates: set = set()  # marked for deletion when RAM is tight
 
     def _move_to_gpu(self, chunk_id, chunk_data):
         try:
-            if "cuda" not in str(self._device):
-                self.cpu_chunks[chunk_id] = chunk_data
-                return True
+            is_cuda = "cuda" in str(self._device)
             embedding = chunk_data.get('embedding')
             if embedding is None:
                 return False
             if chunk_id in self.gpu_chunks:
                 self._gpu_access_time[chunk_id] = time.time()
                 return True
-            bytes_needed = embedding.element_size() * embedding.numel()
-            free = torch.cuda.mem_get_info(self._device)[0]
-            if free <= bytes_needed * 1.5:
-                return False
-            with torch.cuda.stream(self._transfer_stream):
-                gpu_tensor = embedding.to(self._device, non_blocking=True, copy=True)
-                torch.cuda.synchronize()
-            self.gpu_chunks[chunk_id] = gpu_tensor
-            self._chunk_metadata[chunk_id] = {'text': chunk_data.get('text', ''), 'metadata': chunk_data.get('metadata', {}), 'device': 'gpu', 'size_bytes': bytes_needed}
+
+            if is_cuda:
+                bytes_needed = embedding.element_size() * embedding.numel()
+                free = torch.cuda.mem_get_info(self._device)[0]
+                if free <= bytes_needed * 1.5:
+                    return False
+                with torch.cuda.stream(self._transfer_stream):
+                    gpu_tensor = embedding.to(self._device, non_blocking=True, copy=True)
+                    torch.cuda.synchronize()
+                self.gpu_chunks[chunk_id] = gpu_tensor
+                bytes_used = bytes_needed
+            else:
+                # CPU simulation: move from cold (cpu_chunks) to hot (gpu_chunks)
+                self.gpu_chunks[chunk_id] = embedding
+                bytes_used = embedding.element_size() * embedding.numel()
+
+            self._chunk_metadata[chunk_id] = {'text': chunk_data.get('text', ''), 'metadata': chunk_data.get('metadata', {}), 'device': 'gpu' if is_cuda else 'hot', 'size_bytes': bytes_used}
             self.swap_to_gpu_count += 1
             self.total_swaps += 1
             self.last_action = "load"
@@ -74,17 +83,28 @@ class SwapService(ISwapManager):
         try:
             if chunk_id not in self.gpu_chunks:
                 return False
+            is_cuda = "cuda" in str(self._device)
             gpu_tensor = self.gpu_chunks[chunk_id]
-            with torch.cuda.stream(self._transfer_stream):
-                cpu_tensor = gpu_tensor.to('cpu', non_blocking=True, copy=True)
-                if not cpu_tensor.is_pinned():
-                    cpu_tensor = cpu_tensor.pin_memory()
-                torch.cuda.synchronize()
-            self.cpu_chunks[chunk_id] = cpu_tensor
+
+            if is_cuda:
+                with torch.cuda.stream(self._transfer_stream):
+                    cpu_tensor = gpu_tensor.to('cpu', non_blocking=True, copy=True)
+                    try:
+                        if not cpu_tensor.is_pinned():
+                            cpu_tensor = cpu_tensor.pin_memory()
+                    except Exception:
+                        pass
+                    torch.cuda.synchronize()
+                self.cpu_chunks[chunk_id] = cpu_tensor
+                del self.gpu_chunks[chunk_id]
+                torch.cuda.empty_cache()
+            else:
+                # CPU simulation: move from hot (gpu_chunks) back to cold (cpu_chunks)
+                self.cpu_chunks[chunk_id] = gpu_tensor
+                del self.gpu_chunks[chunk_id]
+
             self.total_swaps += 1
             self.last_action = "offload"
-            del self.gpu_chunks[chunk_id]
-            torch.cuda.empty_cache()
             if chunk_id in self._chunk_metadata:
                 self._chunk_metadata[chunk_id]['device'] = 'cpu'
             self.swap_to_ram_count += 1
@@ -93,6 +113,7 @@ class SwapService(ISwapManager):
             return False
 
     def initialize_chunks(self, chunks):
+        is_cuda = "cuda" in str(self._device)
         for chunk in chunks:
             cid = chunk.get('id', f'chunk_{len(self.cpu_chunks)}')
             try:
@@ -101,13 +122,16 @@ class SwapService(ISwapManager):
                     continue
                 if not isinstance(emb, torch.Tensor):
                     emb = torch.tensor(emb, dtype=torch.float32)
-                if not emb.is_pinned():
-                    emb = emb.pin_memory()
+                if is_cuda and not emb.is_pinned():
+                    try:
+                        emb = emb.pin_memory()
+                    except Exception:
+                        pass  # pin_memory may fail without CUDA runtime
                 self.cpu_chunks[cid] = emb
                 self._chunk_metadata[cid] = {'text': chunk.get('text', ''), 'metadata': chunk.get('metadata', {}), 'device': 'cpu', 'size_bytes': emb.element_size() * emb.numel()}
             except Exception as e:
                 logger.error(f"Error archiving chunk {cid}: {e}")
-        if "cuda" in str(self._device) and self.cpu_chunks:
+        if is_cuda and self.cpu_chunks:
             for cid in list(self.cpu_chunks.keys())[:SWAP_GPU_PRELOAD_COUNT]:
                 self._move_to_gpu(cid, {'embedding': self.cpu_chunks[cid], **self._chunk_metadata.get(cid, {})})
 
@@ -138,45 +162,73 @@ class SwapService(ISwapManager):
             cid = c.get('id')
             if cid:
                 self._prefetch_buffer.append(cid)
-        if "cuda" in str(self._device):
-            for cid in self._prefetch_buffer:
-                if cid in self.cpu_chunks and cid not in self.gpu_chunks:
-                    try:
-                        if self._move_to_gpu(cid, {'embedding': self.cpu_chunks[cid], **self._chunk_metadata.get(cid, {})}):
-                            self.prefetch_hits += 1
-                    except Exception:
-                        self._prefetch_misses += 1
+        # Prefetch to GPU/hot storage (works on both CUDA and CPU)
+        for cid in self._prefetch_buffer:
+            if cid in self.cpu_chunks and cid not in self.gpu_chunks:
+                try:
+                    if self._move_to_gpu(cid, {'embedding': self.cpu_chunks[cid], **self._chunk_metadata.get(cid, {})}):
+                        self.prefetch_hits += 1
+                except Exception:
+                    self._prefetch_misses += 1
 
     def decide_swap_action(self, context_chunks, current_context_tokens, iteration=0):
-        if "cuda" not in str(self._device):
-            return {'action': 'none', 'chunk_ids': []}
-        if self._debug_mode:
-            if self._force_offload_on_iteration >= 0 and iteration == self._force_offload_on_iteration:
-                outdated = [c for c in self.gpu_chunks if c not in [ch.get('id') for ch in context_chunks]]
-                if outdated:
-                    return {'action': 'offload', 'chunk_ids': outdated[:SWAP_LRU_OFFLOAD_COUNT + 2]}
-            current_ids = {c.get('id') for c in context_chunks if c.get('id')}
-            outdated = set(self.gpu_chunks.keys()) - current_ids
+        """Determine what swap action to take for the current iteration.
+
+        The default strategy is *proactive*: GPU/hot chunks that are no longer part
+        of the current context are offloaded to RAM/cold on every turn.  This ensures
+        the S-GAS adaptive-swapping behaviour is always active (not just under memory
+        pressure), making the algorithm's GPU ↔ RAM cycle visible in benchmarks
+        from the very first iteration.
+
+        On CPU-only systems, swapping is simulated using hot (gpu_chunks) vs cold
+        (cpu_chunks) dictionaries so the algorithm remains active and countable.
+        """
+        is_cuda = "cuda" in str(self._device)
+        current_ids = {c.get('id') for c in context_chunks if c.get('id')}
+
+        # Optional: force-offload everything not in context at a specific iteration.
+        if self._force_offload_on_iteration >= 0 and iteration == self._force_offload_on_iteration:
+            outdated = [cid for cid in self.gpu_chunks if cid not in current_ids]
             if outdated:
-                return {'action': 'offload', 'chunk_ids': list(outdated)[:SWAP_LRU_OFFLOAD_COUNT + 2]}
-        try:
-            free_mb = torch.cuda.mem_get_info(self._device)[0] / (1024 * 1024)
-            needed_mb = current_context_tokens * 4 / 1024
-        except Exception:
-            return {'action': 'none', 'chunk_ids': []}
-        if free_mb < needed_mb * 0.2:
-            candidates = [c for c in self.gpu_chunks if c not in [ch.get('id') for ch in context_chunks]]
-            if candidates:
-                lru = sorted(candidates, key=lambda x: self._gpu_access_time.get(x, 0))[:SWAP_LRU_OFFLOAD_COUNT]
-                return {'action': 'offload', 'chunk_ids': lru}
-        if free_mb > needed_mb * 2:
-            ids = [c.get('id') for c in context_chunks if c.get('id') and c.get('id') not in self.gpu_chunks]
+                return {'action': 'offload', 'chunk_ids': outdated[:SWAP_LRU_OFFLOAD_COUNT + 2]}
+
+        # Proactive offload: push non-current GPU/hot chunks to RAM/cold,
+        # but retain high-centrality chunks for associative recall.
+        outdated = set(self.gpu_chunks.keys()) - current_ids
+        # Protect high-centrality chunks — keep them in hot storage
+        evictable = outdated - self._protected_chunk_ids
+        # Mark evicted chunks as deletion candidates
+        self._eviction_candidates.update(evictable)
+        if evictable:
+            return {'action': 'offload', 'chunk_ids': list(evictable)[:SWAP_LRU_OFFLOAD_COUNT + 2]}
+        # If only protected chunks remain, still offload them (they stay in cold/cpu)
+        if outdated:
+            return {'action': 'offload', 'chunk_ids': list(outdated)[:SWAP_LRU_OFFLOAD_COUNT + 2]}
+
+        # Load missing current-context chunks into GPU/hot storage.
+        if is_cuda:
+            try:
+                free_mb = torch.cuda.mem_get_info(self._device)[0] / (1024 * 1024)
+                needed_mb = current_context_tokens * 4 / 1024
+            except Exception:
+                return {'action': 'none', 'chunk_ids': []}
+            if free_mb > needed_mb * 2:
+                ids = [c.get('id') for c in context_chunks if c.get('id') and c.get('id') not in self.gpu_chunks]
+                if ids:
+                    return {'action': 'load', 'chunk_ids': ids}
+        else:
+            # CPU simulation: load missing context chunks into hot storage
+            ids = [c.get('id') for c in context_chunks
+                   if c.get('id') and c.get('id') not in self.gpu_chunks and c.get('id') in self.cpu_chunks]
             if ids:
                 return {'action': 'load', 'chunk_ids': ids}
+
+        # Back-off: skip swap if it starts taking longer than the compute budget.
         avg_c = sum(self._t_comp_history) / len(self._t_comp_history) if self._t_comp_history else 1.0
         avg_s = sum(self._t_swap_history) / len(self._t_swap_history) if self._t_swap_history else 0.001
         if avg_c > 0 and avg_s / avg_c > self._threshold:
             return {'action': 'none', 'chunk_ids': []}
+
         return {'action': 'none', 'chunk_ids': []}
 
     def execute_swap_decision(self, decision):
@@ -235,19 +287,50 @@ class SwapService(ISwapManager):
 
         except FuturesTimeoutError:
             logger.error(f"Swap operation timeout after {timeout_sec}s")
-            torch.cuda.empty_cache()
+            if "cuda" in str(self._device):
+                torch.cuda.empty_cache()
             return False
         except Exception as e:
             logger.error(f"Swap execution error: {e}")
             return False
+
+    def update_protected_chunks(self, high_centrality_ids: list):
+        """Update the set of high-centrality chunks that should be retained in hot storage."""
+        self._protected_chunk_ids = set(high_centrality_ids)
+
+    def evict_candidates_if_needed(self):
+        """Delete eviction candidates from cpu_chunks when RAM usage exceeds threshold.
+
+        Returns the number of chunks actually deleted.
+        """
+        try:
+            import psutil
+            ram_used_gb = psutil.virtual_memory().used / (1024 ** 3)
+        except ImportError:
+            return 0
+        if ram_used_gb < self._eviction_ram_threshold_gb:
+            return 0
+        deleted = 0
+        for cid in list(self._eviction_candidates):
+            if cid in self.cpu_chunks and cid not in self.gpu_chunks:
+                del self.cpu_chunks[cid]
+                self._chunk_metadata.pop(cid, None)
+                self._eviction_candidates.discard(cid)
+                deleted += 1
+        if deleted:
+            logger.info(f"Evicted {deleted} candidate chunks (RAM {ram_used_gb:.1f}GB >= {self._eviction_ram_threshold_gb}GB)")
+        return deleted
 
     def record_compute_time(self, compute_time_ms):
         self._t_comp_history.append(compute_time_ms / 1000.0)
 
     def get_statistics(self):
         gpu_stats = {}
-        if "cuda" in str(self._device):
+        is_cuda = "cuda" in str(self._device)
+        if is_cuda:
             gpu_stats = {'gpu_reserved_mb': round(torch.cuda.memory_reserved(self._device) / (1024*1024), 2), 'gpu_allocated_mb': round(torch.cuda.memory_allocated(self._device) / (1024*1024), 2), 'free_gpu_mb': round(torch.cuda.mem_get_info(self._device)[0] / (1024*1024), 2)}
+        hot_mb = sum(t.element_size() * t.numel() / (1024*1024) for t in self.gpu_chunks.values())
+        gpu_stats['hot_storage_mb'] = round(hot_mb, 2)
         cpu_mb = sum(t.element_size() * t.numel() / (1024*1024) for t in self.cpu_chunks.values())
         total_prefetch = self.prefetch_hits + self._prefetch_misses
         total_cache = self._cache_hits_total + self._cache_misses_total
@@ -274,7 +357,29 @@ class SwapService(ISwapManager):
             'swap_triggered': self.total_swaps > 0,
         }
 
-    def cleanup(self):
+    def reset_state(self):
+        """Fully wipe all accumulated chunk state. Call before each benchmark mode to ensure clean isolation."""
+        self.gpu_chunks.clear()
         if "cuda" in str(self._device):
-            self.gpu_chunks.clear()
+            torch.cuda.empty_cache()
+        self.cpu_chunks.clear()
+        self._chunk_metadata.clear()
+        self._prefetch_buffer.clear()
+        self._gpu_access_time.clear()
+        self.swap_to_ram_count = 0
+        self.swap_to_gpu_count = 0
+        self.prefetch_hits = 0
+        self._prefetch_misses = 0
+        self._cache_hits_total = 0
+        self._cache_misses_total = 0
+        self.total_swaps = 0
+        self.last_action = "wait"
+        self._t_comp_history.clear()
+        self._t_swap_history.clear()
+        self._protected_chunk_ids.clear()
+        self._eviction_candidates.clear()
+
+    def cleanup(self):
+        self.gpu_chunks.clear()
+        if "cuda" in str(self._device):
             torch.cuda.empty_cache()

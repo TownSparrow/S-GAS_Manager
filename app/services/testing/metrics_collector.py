@@ -23,8 +23,8 @@ class MetricsCollector:
         metric_entry = {
             # Base metrics
             'iteration': len(self.metrics_history) + 1,
-            'query': turn_data.get('query', '')[:60],
-            'response': turn_data.get('response', '')[:100],
+            'query': turn_data.get('query', ''),
+            'response': turn_data.get('response', ''),
             'latency_ms': round(turn_data.get('latency_ms', 0), 2),
 
             # Latency breakdown
@@ -50,6 +50,13 @@ class MetricsCollector:
             # Graph
             'graph_nodes': turn_data.get('graph_nodes', 0),
             'graph_edges': turn_data.get('graph_edges', 0),
+
+            # System resources
+            'ram_used_gb': round(turn_data.get('ram_used_gb', 0), 2),
+            'ram_percent': round(turn_data.get('ram_percent', 0), 1),
+            'disk_used_gb': round(turn_data.get('disk_used_gb', 0), 1),
+            'disk_percent': round(turn_data.get('disk_percent', 0), 1),
+            'process_rss_mb': round(turn_data.get('process_rss_mb', 0), 1),
 
             # Semantic metrics
             'recall_at_k': round(turn_data.get('recall_at_k', 0), 3),
@@ -137,6 +144,12 @@ class MetricsCollector:
             # Graph
             'avg_graph_nodes': round(avg_graph_nodes, 1),
             'avg_graph_edges': round(avg_graph_edges, 1),
+
+            # System resources
+            'peak_ram_used_gb': round(max((m.get('ram_used_gb', 0) for m in metrics), default=0), 2),
+            'avg_ram_percent': round(sum(m.get('ram_percent', 0) for m in metrics) / len(metrics), 1),
+            'peak_process_rss_mb': round(max((m.get('process_rss_mb', 0) for m in metrics), default=0), 1),
+            'avg_disk_percent': round(sum(m.get('disk_percent', 0) for m in metrics) / len(metrics), 1),
             
             # Comparison with targets (защита от деления на ноль)
             'target_comparison': {

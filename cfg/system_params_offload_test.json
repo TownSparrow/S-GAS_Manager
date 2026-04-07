@@ -2,14 +2,14 @@
   "vllm": {
     "model_name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
     "gpu_memory_utilization": 0.4,
-    "max_model_len": 4096,
+    "max_model_len": 8192,
     "quantization": "awq_marlin",
     "dtype": "auto",
     "trust_remote_code": true,
     "api_base": "http://localhost:8000/v1",
     "temperature": 0.7,
     "top_p": 0.9,
-    "max_tokens": 512
+    "max_tokens": 2048
   },
   "embeddings": {
     "model": "sentence-transformers/all-MiniLM-L6-v2",
@@ -41,12 +41,13 @@
     "threshold": 2.0,
     "prefetch_count": 8,
     "memory_check_interval": 50,
-    "debug_mode": true,
-    "force_offload_on_iteration": -1
+    "force_offload_on_iteration": 1
   },
   "retrieval": {
     "initial_top_k_multiplier": 3,
-    "exclude_used_chunks": true
+    "exclude_used_chunks": true,
+    "bm25_weight": 0.4,
+    "rrf_k": 60
   },
   "api": {
     "host": "0.0.0.0",

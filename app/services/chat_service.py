@@ -1,6 +1,7 @@
 import time
 import json
 import logging
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
@@ -15,9 +16,11 @@ from app.interfaces.graph_builder import IGraphBuilder
 from app.interfaces.scorer import IScorer
 from app.interfaces.swap_manager import ISwapManager
 from app.interfaces.vllm_client import IVLLMClient
-from app.consts.defaults import MAX_CHUNK_TEXT_LEN, GRAPH_FALLBACK_DISTANCE, EMBEDDING_DIM, METRICS_FILE
+from app.services.bm25_service import BM25Service
+from app.consts.defaults import MAX_CHUNK_TEXT_LEN, EMBEDDING_DIM, METRICS_FILE
 from app.consts.prompts import PROMPT_WITH_CONTEXT, PROMPT_WITHOUT_CONTEXT
 from app.utils.gpu import log_gpu_memory_detailed, get_gpu_memory_stats
+from app.utils.system_resources import get_system_resources
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,10 @@ class ChatService:
     def __init__(self, embedding_service: IEmbeddingService, vector_store: IVectorStore,
                  chunker: IChunker, graph_builder: IGraphBuilder, scorer: IScorer,
                  swap_manager: ISwapManager, vllm_client: IVLLMClient,
-                 prompt_config: Dict[str, Any], model_name: str = "", kv_monitor=None):
+                 prompt_config: Dict[str, Any], model_name: str = "", kv_monitor=None,
+                 min_similarity_score: float = 0.0,
+                 bm25_weight: float = 0.0, rrf_k: int = 60,
+                 enable_sgas_filtering: bool = True):
         self._embedding = embedding_service
         self._vector_store = vector_store
         self._chunker = chunker
@@ -48,6 +54,12 @@ class ChatService:
         self._prompt_config = prompt_config
         self._model_name = model_name
         self._kv_monitor = kv_monitor
+        self._min_similarity_score = min_similarity_score
+        self._bm25 = BM25Service()
+        self._bm25_weight = bm25_weight  # 0 = disabled, >0 = hybrid
+        self._rrf_k = rrf_k  # RRF constant (default 60)
+        self._enable_sgas_filtering = enable_sgas_filtering
+        self._exclude_used_chunks = False  # default; overridden by config
 
     async def process_chat(self, session_id: str, session_data: Dict[str, Any], message: str,
                            use_rag: bool = True, n_chunks: int = 5,
@@ -55,17 +67,18 @@ class ChatService:
                            max_tokens: Optional[int] = None,
                            baseline_mode: bool = False,
                            run_id: Optional[str] = None) -> Dict[str, Any]:
-        """Runs S-GAS pipeline.
-
-        Args:
-            baseline_mode: If True, skips graph scoring and swap management.
-                          Uses only semantic vector search (vanilla RAG).
-                          Used for comparison in benchmarks.
-        """
+        """Runs S-GAS pipeline."""
 
         session_data['iteration'] += 1
         iteration = session_data['iteration']
-        excluded_chunks = session_data.get('excluded_chunks', [])
+        # When exclude_used_chunks is False (default), S-GAS can re-use
+        # previously selected chunks — the algorithm re-ranks all candidates
+        # each turn, allowing the best chunks to appear again.
+        exclude_used = session_data.get('exclude_used_chunks', self._exclude_used_chunks)
+        if baseline_mode or not exclude_used:
+            excluded_chunks = []
+        else:
+            excluded_chunks = session_data.get('excluded_chunks', [])
 
         # Reset peak VRAM tracker for this iteration
         if torch.cuda.is_available():
@@ -90,6 +103,14 @@ class ChatService:
                 all_embeddings = self._get_safe_embeddings(all_session_chunks)
                 self._graph.build_graph(chunks=all_session_chunks, embeddings=all_embeddings)
                 session_data['graph_initialized'] = True
+                # Update swap service with high-centrality chunks for soft eviction
+                try:
+                    top_ids = self._graph.get_high_centrality_chunk_ids(
+                        self._swap._retain_top_centrality_pct
+                    )
+                    self._swap.update_protected_chunks(top_ids)
+                except Exception:
+                    pass
                 logger.info(
                     f"Graph pre-built from {len(all_session_chunks)} chunks "
                     f"in {round((time.time() - t_graph_init) * 1000)}ms"
@@ -104,12 +125,25 @@ class ChatService:
         if use_rag and context_chunks and query_vec is not None:
             if baseline_mode:
                 # Baseline: semantic-only ranking (no graph, no hybrid scoring)
-                final_context = context_chunks[:n_chunks]
+                candidates = context_chunks[:n_chunks]
+                # Filter out low-similarity chunks to improve precision.
+                # Chunks with similarity below threshold are noise that dilutes
+                # the context without contributing useful information.
+                if self._min_similarity_score > 0:
+                    candidates = [
+                        c for c in candidates
+                        if c.get('similarity_score', 1.0) >= self._min_similarity_score
+                    ]
+                final_context = candidates if candidates else context_chunks[:1]
             else:
                 # S-GAS: full graph + hybrid reranking
                 final_context, chunk_embeddings, graph_distances = self._rerank_chunks(
                     context_chunks, query_vec, message, n_chunks,
+                    excluded_chunks=set(excluded_chunks),
                 )
+                # Ensure at least min_return_chunks survive score filtering
+                if len(final_context) < self._scorer._min_return_chunks and context_chunks:
+                    final_context = context_chunks[:self._scorer._min_return_chunks]
                 try:
                     graph_stats = self._graph.get_graph_statistics()
                 except Exception:
@@ -123,15 +157,25 @@ class ChatService:
         # Collect retrieved chunk IDs, texts, and scores
         retrieved_chunk_ids = [c.get('id', '') for c in final_context if 'id' in c]
         retrieved_chunk_texts = [c.get('text', '') for c in final_context]
-        chunk_scores = [
-            {
+        chunk_scores = []
+        for rank, c in enumerate(final_context):
+            entry = {
                 'id': c.get('id', ''),
-                'hybrid_score': c.get('hybrid_score', 0.0),
-                'semantic_score': c.get('semantic_score', 0.0),
-                'graph_score': c.get('graph_score', 0.0),
+                'rank': rank + 1,
+                'semantic_score': round(c.get('semantic_score', 0.0), 4),
+                'graph_score': round(c.get('graph_score', 0.0), 4),
+                'hybrid_score': round(c.get('hybrid_score', 0.0), 4),
+                'cross_encoder_score': round(c.get('cross_encoder_score', -1.0), 4),
+                'final_score': round(c.get('final_score', c.get('hybrid_score', 0.0)), 4),
             }
-            for c in final_context
-        ]
+            chunk_scores.append(entry)
+
+        # ── Log chunk selection reasons ──────────────────────────────
+        if final_context and not baseline_mode:
+            self._log_chunk_selection(
+                session_id=session_id, iteration=iteration,
+                query=message, chunk_scores=chunk_scores,
+            )
 
         # ── STEP 3: Mark used chunks ──────────────────────────────────
         if final_context:
@@ -158,6 +202,9 @@ class ChatService:
         else:
             swap_action = await self._manage_swap(session_id, session_data, final_context, iteration)
         step_timings['swap_ms'] = round((time.time() - t_swap) * 1000, 2)
+        # Soft eviction: delete marked candidates when RAM exceeds threshold
+        if not baseline_mode:
+            self._swap.evict_candidates_if_needed()
         vram_per_step['after_swap'] = _get_vram_gb()
 
         # ── STEP 5: Prompt + Inference ────────────────────────────────
@@ -190,6 +237,9 @@ class ChatService:
             )
 
         vram_per_step['after_inference'] = _get_vram_gb()
+
+        # System resources (RAM, disk, process memory)
+        system_resources = get_system_resources()
 
         response_text = llm_response['choices'][0]['message']['content']
         usage = llm_response.get('usage', {})
@@ -245,6 +295,9 @@ class ChatService:
                 # VRAM per step
                 'vram': vram_per_step,
 
+                # System resources (RAM, disk, process memory)
+                'system_resources': system_resources,
+
                 # Cache / Swap
                 'cache_check': cache_check,
                 'swap_action': swap_action,
@@ -269,33 +322,89 @@ class ChatService:
             },
         }
 
+    async def _ensure_bm25_index(self, session_id: str) -> None:
+        """Lazily build BM25 index on first search for a session."""
+        if self._bm25_weight <= 0:
+            return
+        if self._bm25._indices.get(session_id) is not None:
+            return
+        all_chunks = await self._vector_store.get_all_session_chunks(session_id)
+        if all_chunks:
+            self._bm25.build_index(session_id, all_chunks)
+
+    @staticmethod
+    def _reciprocal_rank_fusion(
+        ranked_lists: List[List[Dict[str, Any]]],
+        weights: List[float],
+        k: int = 60,
+    ) -> List[Dict[str, Any]]:
+        """Merge multiple ranked lists via weighted Reciprocal Rank Fusion."""
+        scores: Dict[str, float] = {}
+        chunk_map: Dict[str, Dict[str, Any]] = {}
+
+        for ranked, w in zip(ranked_lists, weights):
+            for rank, chunk in enumerate(ranked, start=1):
+                cid = chunk.get("id", "")
+                if not cid:
+                    continue
+                scores[cid] = scores.get(cid, 0.0) + w / (k + rank)
+                if cid not in chunk_map:
+                    chunk_map[cid] = chunk
+
+        fused = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        return [chunk_map[cid] for cid, _ in fused if cid in chunk_map]
+
     async def _search_chunks(self, session_id, message, excluded_chunks, n_chunks):
-        """
-        Searches for relevant chunks. If no new chunks found, fall back to best
-        previously-used chunks (re-rank by current query relevance).
-        """
+        """Searches for relevant chunks using hybrid vector + BM25 retrieval."""
         try:
             q = self._embedding.get_embeddings([message])[0]
             top_k = max(20, n_chunks * 3)
             search_k = top_k * 2 if excluded_chunks else top_k
 
-            all_candidates = await self._vector_store.search(
+            # Vector search
+            vector_candidates = await self._vector_store.search(
                 query_embedding=q, session_id=session_id, top_k=search_k,
             )
+
+            # Hybrid: combine vector + BM25 via RRF
+            if self._bm25_weight > 0:
+                await self._ensure_bm25_index(session_id)
+                bm25_candidates = self._bm25.search(session_id, message, top_k=search_k)
+
+                if bm25_candidates:
+                    vec_w = 1.0 - self._bm25_weight
+                    bm25_w = self._bm25_weight
+                    all_candidates = self._reciprocal_rank_fusion(
+                        [vector_candidates, bm25_candidates],
+                        [vec_w, bm25_w],
+                        k=self._rrf_k,
+                    )
+                    logger.debug(
+                        f"Hybrid search: {len(vector_candidates)} vector + "
+                        f"{len(bm25_candidates)} BM25 → {len(all_candidates)} fused"
+                    )
+                else:
+                    all_candidates = vector_candidates
+            else:
+                all_candidates = vector_candidates
 
             if excluded_chunks:
                 excluded_set = set(excluded_chunks)
                 new_chunks = [c for c in all_candidates if c.get('id') not in excluded_set]
 
-                if new_chunks:
+                if len(new_chunks) >= n_chunks:
                     return new_chunks[:top_k], q
 
-                # Fallback: no new chunks available — return best matches from all chunks
+                # Not enough new chunks — backfill with the most relevant previously-used chunks to guarantee at least n_chunks candidates.
+                used_chunks = [c for c in all_candidates if c.get('id') in excluded_set]
+                backfill_needed = n_chunks - len(new_chunks)
+                combined = new_chunks + used_chunks[:backfill_needed]
                 logger.info(
-                    f"No new chunks for session {session_id} (all {len(excluded_set)} excluded). "
-                    f"Falling back to top-{n_chunks} most relevant from all chunks."
+                    f"Backfilled {min(backfill_needed, len(used_chunks))} used chunks "
+                    f"({len(new_chunks)} new + {min(backfill_needed, len(used_chunks))} reused "
+                    f"= {len(combined)} total)"
                 )
-                return all_candidates[:n_chunks], q
+                return combined[:top_k], q
 
             return all_candidates[:top_k], q
         except Exception as e:
@@ -314,36 +423,75 @@ class ChatService:
         except Exception:
             return np.zeros((len(chunks), EMBEDDING_DIM))
 
-    def _rerank_chunks(self, context_chunks, query_vec, message, n_chunks):
+    def _rerank_chunks(self, context_chunks, query_vec, message, n_chunks, excluded_chunks=None):
         chunk_embeddings = np.array([])
         graph_distances = {}
+        excluded_set = excluded_chunks or set()
         try:
             chunk_embeddings = self._get_safe_embeddings(context_chunks)
             self._graph.update_graph(new_chunks=context_chunks, new_embeddings=chunk_embeddings)
 
-            # Graph-neighbor expansion
+            # Graph-neighbor expansion with semantic quality gate
             try:
                 semantic_ids = {c.get('id') for c in context_chunks if c.get('id')}
                 graph_neighbors = self._graph.get_neighboring_chunks_data(
-                    list(semantic_ids), top_k=10
+                    list(semantic_ids), top_k=5
                 )
-                new_neighbors = [c for c in graph_neighbors if c.get('id') not in semantic_ids]
-                if new_neighbors:
-                    context_chunks = list(context_chunks) + new_neighbors
-                    extra_emb = self._get_safe_embeddings(new_neighbors)
-                    chunk_embeddings = np.vstack([chunk_embeddings, extra_emb])
-                    logger.debug(f"Graph expansion: +{len(new_neighbors)} neighbor chunks")
+                new_neighbors = [
+                    c for c in graph_neighbors
+                    if c.get('id') not in semantic_ids and c.get('id') not in excluded_set
+                ]
+                if new_neighbors and query_vec is not None:
+                    neighbor_embs = self._get_safe_embeddings(new_neighbors)
+                    q_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+                    n_norms = neighbor_embs / (np.linalg.norm(neighbor_embs, axis=1, keepdims=True) + 1e-8)
+                    sims = np.dot(n_norms, q_norm)
+                    if context_chunks:
+                        best_sim = max(
+                            (c.get('similarity_score', 0.0) for c in context_chunks),
+                            default=0.3,
+                        )
+                        sim_threshold = max(0.1, best_sim * 0.4)
+                    else:
+                        sim_threshold = 0.1
+                    qualified = []
+                    qualified_embs = []
+                    for idx, neighbor in enumerate(new_neighbors):
+                        if float(sims[idx]) >= sim_threshold:
+                            qualified.append(neighbor)
+                            qualified_embs.append(neighbor_embs[idx])
+                    if qualified:
+                        context_chunks = list(context_chunks) + qualified
+                        chunk_embeddings = np.vstack([chunk_embeddings, np.array(qualified_embs)])
+                        logger.debug(
+                            f"Graph expansion: +{len(qualified)} neighbor chunks "
+                            f"(filtered from {len(new_neighbors)}, threshold={sim_threshold:.3f})"
+                        )
+                    elif new_neighbors:
+                        logger.debug(
+                            f"Graph expansion: all {len(new_neighbors)} neighbors below "
+                            f"semantic threshold {sim_threshold:.3f}"
+                        )
             except Exception as e:
                 logger.debug(f"Graph expansion skipped: {e}")
             # ─────────────────────────────────────────────────────────────────
 
             chunk_ids = [c.get('id', f'chunk_{i}') for i, c in enumerate(context_chunks)]
-            graph_distances = self._graph.compute_graph_distances(query_text=message, chunk_ids=chunk_ids)
-        except Exception:
-            graph_distances = {
-                c.get('id', f'chunk_{i}'): GRAPH_FALLBACK_DISTANCE
-                for i, c in enumerate(context_chunks)
-            }
+            graph_distances = self._graph.compute_graph_distances(
+                query_text=message, chunk_ids=chunk_ids,
+                embedding_service=self._embedding,
+            )
+        except Exception as e:
+            # Graph computation failed — log full traceback and signal the
+            # scorer to ignore the graph signal entirely (empty dict).
+            # The scorer will fall back to semantic-only ranking instead of
+            # using a fake constant fallback distance for every chunk.
+            logger.warning(
+                f"Graph distance computation failed: {e}. "
+                f"Falling back to semantic-only ranking.",
+                exc_info=True,
+            )
+            graph_distances = {}
             if len(chunk_embeddings) == 0:
                 chunk_embeddings = self._get_safe_embeddings(context_chunks)
         try:
@@ -351,21 +499,20 @@ class ChatService:
                 chunk_embeddings = np.array(chunk_embeddings)
             if isinstance(query_vec, list):
                 query_vec = np.array(query_vec)
-            if not graph_distances:
-                graph_distances = {
-                    c.get('id', f'chunk_{i}'): GRAPH_FALLBACK_DISTANCE
-                    for i, c in enumerate(context_chunks)
-                }
             return (
                 self._scorer.rerank_chunks(
                     query_embedding=query_vec, chunks=context_chunks,
                     chunk_embeddings=chunk_embeddings, graph_distances=graph_distances,
                     top_k=n_chunks,
+                    min_score=self._min_similarity_score if self._enable_sgas_filtering else 0.0,
+                    query_text=message,
+                    enable_adaptive_k=self._enable_sgas_filtering,
                 ),
                 chunk_embeddings,
                 graph_distances,
             )
-        except Exception:
+        except Exception as e:
+            logger.error(f"Reranking failed entirely: {e}", exc_info=True)
             return context_chunks[:n_chunks], chunk_embeddings, graph_distances
 
     async def _manage_swap(self, session_id, session_data, final_context, iteration):
@@ -421,6 +568,74 @@ class ChatService:
             return await self._vllm.flush_cache()
         except Exception:
             return False
+
+    def get_graph_snapshot(self) -> Dict[str, Any]:
+        """Export of current graph state for visualization / archival."""
+        try:
+            return self._graph.export_graph_info()
+        except Exception as e:
+            logger.warning(f"Graph snapshot failed: {e}")
+            return {"nodes": [], "edges": [], "statistics": {}}
+
+    def reset_for_benchmark(self) -> None:
+        """Reset of all stateful services before a new benchmark mode run."""
+        try:
+            self._graph.reset_state()
+        except Exception as e:
+            logger.warning(f"Graph reset skipped: {e}")
+        try:
+            self._swap.reset_state()
+        except Exception as e:
+            logger.warning(f"Swap reset skipped: {e}")
+        try:
+            self._bm25.reset_state()
+        except Exception:
+            pass
+        try:
+            self._embedding.clear_cache()
+        except Exception:
+            pass  # embedding service may not have a cache — ignore silently
+
+        # Free GPU memory so the next mode starts with a clean VRAM baseline
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.reset_accumulated_memory_stats()
+            logger.info(
+                f"GPU memory cleared: allocated={torch.cuda.memory_allocated()/1024**3:.3f} GB, "
+                f"reserved={torch.cuda.memory_reserved()/1024**3:.3f} GB"
+            )
+
+    def _log_chunk_selection(self, session_id: str, iteration: int,
+                             query: str, chunk_scores: list):
+        """Logging why each chunk was selected, with per-component scores."""
+        try:
+            log_path = Path("logs/chunk_selection.jsonl")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "session_id": session_id,
+                "iteration": iteration,
+                "query": query[:120],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "selected_chunks": chunk_scores,
+            }
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+            # Console summary
+            for cs in chunk_scores:
+                logger.info(
+                    f"    [Chunk {cs['rank']}] {cs['id'][-20:]}  "
+                    f"sem={cs['semantic_score']:.3f}  "
+                    f"graph={cs['graph_score']:.3f}  "
+                    f"hybrid={cs['hybrid_score']:.3f}  "
+                    f"ce={cs['cross_encoder_score']:.3f}  "
+                    f"final={cs['final_score']:.3f}"
+                )
+        except Exception as e:
+            logger.debug(f"Chunk selection logging failed: {e}")
 
     async def _log_metrics(self, session_id, iteration, final_context, excluded_chunks,
                            chunking_stats, inference_time, swap_action, usage):

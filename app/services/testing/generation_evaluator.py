@@ -93,14 +93,6 @@ class GenerationEvaluator:
 
         # Calculating ROUGE
         rouge_scores = self.calculate_rouge(generated_answer, reference_answer)
-
-        # For short references (< 15 words) BERTScore embeddings are unstable
-        # because a single short sentence maps to a very different point in
-        # embedding space than a longer generated answer that *contains* the
-        # same information.  We therefore use a combined criterion:
-        #   correct if BERTScore >= threshold  OR  ROUGE-L F1 >= 0.40
-        # ROUGE-L captures whether the key content from the short reference
-        # actually appears in the generated text.
         rougeL = rouge_scores.get('rougeL', 0.0)
         is_correct = bertscore >= self.bertscore_threshold or rougeL >= 0.40
 
@@ -109,8 +101,8 @@ class GenerationEvaluator:
             'is_correct': is_correct,
             'bertscore_threshold': self.bertscore_threshold,
             'rouge_scores': rouge_scores,
-            'generated_answer_preview': generated_answer[:100],
-            'reference_answer_preview': reference_answer[:100]
+            'generated_answer_preview': generated_answer[:500],
+            'reference_answer_preview': reference_answer[:500]
         }
         
         return result

@@ -12,10 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 class BenchmarkController:
-    def __init__(self, benchmark_runner, sessions: Dict[str, Any], document_processor):
+    def __init__(self, benchmark_runner, sessions: Dict[str, Any], document_processor, graph_service=None):
         self._benchmark_runner = benchmark_runner
         self._sessions = sessions
         self._document_processor = document_processor
+        self._graph_service = graph_service
 
     async def benchmark_ui(self):
         static_benchmark = STATIC_DIR / "benchmark.html"
@@ -36,13 +37,15 @@ class BenchmarkController:
             logger.error(f"Failed to list scenarios: {e}")
             return {"status": "error", "message": str(e), "scenarios": []}
 
-    async def run_benchmark(self, scenario_name: str, session_id: Optional[str] = None):
+    async def run_benchmark(self, scenario_name: str, session_id: Optional[str] = None,
+                            fresh_server: bool = False):
         try:
             result = await self._benchmark_runner.run_scenario(
                 scenario_name=scenario_name,
                 sessions=self._sessions,
                 document_processor=self._document_processor,
                 session_id=session_id,
+                fresh_server=fresh_server,
             )
             return {
                 "status": "success",
@@ -61,6 +64,33 @@ class BenchmarkController:
             }
         except Exception as e:
             logger.error(f"Benchmark failed: {e}")
+            import traceback
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def run_single_mode(self, scenario_name: str, mode: str = "sgas",
+                              fresh_server: bool = False):
+        """Running benchmark in a single mode only (sgas or baseline)."""
+        if mode not in ("sgas", "baseline"):
+            raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}. Use 'sgas' or 'baseline'.")
+        try:
+            result = await self._benchmark_runner.run_single_mode(
+                scenario_name=scenario_name,
+                sessions=self._sessions,
+                mode=mode,
+                document_processor=self._document_processor,
+                fresh_server=fresh_server,
+            )
+            return {
+                "status": "success",
+                "scenario": result['scenario'],
+                "mode": result['mode'],
+                "session_id": result['session_id'],
+                "summary": result['summary'],
+                "files": {"csv": result['csv_file'], "json": result['json_file']},
+            }
+        except Exception as e:
+            logger.error(f"Single-mode benchmark failed: {e}")
             import traceback
             logger.error(f"Traceback:\n{traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -92,6 +122,55 @@ class BenchmarkController:
             }
         except Exception as e:
             logger.error(f"Report generation failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def graph_ui(self):
+        from app.consts.defaults import STATIC_DIR
+        graph_page = STATIC_DIR / "graph.html"
+        if graph_page.exists():
+            return FileResponse(str(graph_page))
+        return JSONResponse(
+            {"message": "Graph visualization page not found", "hint": "Create static/graph.html"},
+            status_code=404,
+        )
+
+    async def get_graph_data(self):
+        """Returning the current knowledge graph as JSON for the visualization client."""
+        if self._graph_service is None:
+            return JSONResponse(
+                {"status": "error", "message": "Graph service not available"},
+                status_code=503,
+            )
+        try:
+            data = self._graph_service.export_graph_info()
+            nodes = data.get('nodes', [])
+
+            # If the live graph is empty, try the last persisted snapshot.
+            if not nodes:
+                snapshot_path = Path("logs/benchmarks/latest_sgas_graph.json")
+                if snapshot_path.exists():
+                    try:
+                        with open(snapshot_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        nodes = data.get('nodes', [])
+                        logger.info(
+                            f"Live graph empty — serving snapshot: {len(nodes)} nodes "
+                            f"from {snapshot_path}"
+                        )
+                    except Exception as snap_err:
+                        logger.warning(f"Could not read graph snapshot: {snap_err}")
+
+            stats = data.get('statistics', {})
+            return {
+                "status": "success",
+                "statistics": stats,
+                "nodes": nodes,
+                "edges": data.get('edges', []),
+                "node_count": len(nodes),
+                "edge_count": len(data.get('edges', [])),
+            }
+        except Exception as e:
+            logger.error(f"Graph data export failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     async def get_benchmark_results(self, scenario_name: str):

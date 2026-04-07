@@ -63,14 +63,30 @@ class BenchmarkRunner:
 
     # ── Public API ─────────────────────────────────────────────────────
 
+    async def _reset_and_flush(self, label: str, fresh_server: bool = False):
+        """Reset of stateful services and optionally restart vLLM."""
+        if self._chat_service is None:
+            return
+        self._chat_service.reset_for_benchmark()
+        if fresh_server:
+            restarted = await self._chat_service._vllm.force_restart()
+            if restarted:
+                logger.info(f"vLLM server restarted before {label}")
+            else:
+                logger.warning(f"vLLM restart failed before {label}; continuing with cache flush")
+        flushed = await self._chat_service.flush_vllm_cache()
+        if flushed:
+            logger.info(f"vLLM cache flushed before {label}")
+
     async def run_scenario(
         self,
         scenario_name: str,
         sessions: dict,
         document_processor=None,
         session_id: Optional[str] = None,
+        fresh_server: bool = False,
     ) -> Dict:
-        """Run scenario in both S-GAS and baseline modes, compare results."""
+        """Running scenario in both S-GAS and baseline modes, compare results."""
         doc_processor = document_processor or self._document_processor
         if doc_processor is None:
             raise ValueError("document_processor is required")
@@ -83,21 +99,11 @@ class BenchmarkRunner:
         if not doc_path.exists():
             raise FileNotFoundError(f"Document not found: {doc_path}")
 
-        # Unique IDs so each mode gets a distinct vLLM prompt prefix —
-        # this prevents the GPU KV-cache from bleeding across modes.
         sgas_run_id = uuid.uuid4().hex
         baseline_run_id = uuid.uuid4().hex
 
-        # Flush vLLM's prefix KV-cache before each mode so latency
-        # measurements are not distorted by previous runs.
-        if self._chat_service is not None:
-            flushed = await self._chat_service.flush_vllm_cache()
-            if flushed:
-                logger.info("vLLM cache flushed before S-GAS run")
-            else:
-                logger.debug("vLLM cache flush skipped (no reset endpoint); run_id prefix prevents cross-run reuse")
-
         # ── Run S-GAS mode ────────────────────────────────────────────
+        await self._reset_and_flush("S-GAS run", fresh_server=fresh_server)
         logger.info("── Mode: S-GAS (semantic + graph + swap) ──")
         sgas_session = self._create_session(sessions)
         self._upload_document(sgas_session, doc_path, doc_processor,
@@ -109,15 +115,11 @@ class BenchmarkRunner:
             retrieval_eval=self._sgas_retrieval, perf_monitor=self._sgas_perf,
             run_id=sgas_run_id,
         )
-
-        if self._chat_service is not None:
-            flushed = await self._chat_service.flush_vllm_cache()
-            if flushed:
-                logger.info("vLLM cache flushed before Baseline run")
-            else:
-                logger.debug("vLLM cache flush skipped (no reset endpoint); run_id prefix prevents cross-run reuse")
+        self._cleanup_session(sgas_session)
+        self._save_graph_snapshot(scenario_name, timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"))
 
         # ── Run Baseline mode ─────────────────────────────────────────
+        await self._reset_and_flush("Baseline run", fresh_server=fresh_server)
         logger.info("── Mode: Baseline (semantic only) ──")
         baseline_session = self._create_session(sessions)
         self._upload_document(baseline_session, doc_path, doc_processor,
@@ -129,6 +131,7 @@ class BenchmarkRunner:
             retrieval_eval=self._baseline_retrieval, perf_monitor=self._baseline_perf,
             run_id=baseline_run_id,
         )
+        self._cleanup_session(baseline_session)
 
         # ── Compare ───────────────────────────────────────────────────
         comparison = self._compare_results(sgas_result['summary'], baseline_result['summary'])
@@ -161,6 +164,64 @@ class BenchmarkRunner:
             'comparison_file': str(comparison_json),
         }
 
+    async def run_single_mode(
+        self,
+        scenario_name: str,
+        sessions: dict,
+        mode: str = "sgas",
+        document_processor=None,
+        fresh_server: bool = False,
+    ) -> Dict:
+        """Running scenario in a single mode only (sgas or baseline)."""
+        doc_processor = document_processor or self._document_processor
+        if doc_processor is None:
+            raise ValueError("document_processor is required")
+
+        baseline_mode = (mode == "baseline")
+        scenario = self.scenario_loader.load_scenario(scenario_name)
+        logger.info(f"=== Single-mode Benchmark: {scenario.name} ({mode}) ===")
+
+        doc_path = self.documents_dir / scenario.document
+        if not doc_path.exists():
+            raise FileNotFoundError(f"Document not found: {doc_path}")
+
+        await self._reset_and_flush(f"{mode} run", fresh_server=fresh_server)
+
+        run_id = uuid.uuid4().hex
+        collector = self._sgas_collector if not baseline_mode else self._baseline_collector
+        retrieval_eval = self._sgas_retrieval if not baseline_mode else self._baseline_retrieval
+        perf_monitor = self._sgas_perf if not baseline_mode else self._baseline_perf
+
+        session_id = self._create_session(sessions)
+        self._upload_document(session_id, doc_path, doc_processor,
+                              chunk_size=scenario.chunk_size,
+                              chunk_overlap=scenario.chunk_overlap)
+        result = await self._run_mode(
+            scenario=scenario, sessions=sessions, session_id=session_id,
+            baseline_mode=baseline_mode, collector=collector,
+            retrieval_eval=retrieval_eval, perf_monitor=perf_monitor,
+            run_id=run_id,
+        )
+        self._cleanup_session(session_id)
+
+        if not baseline_mode:
+            self._save_graph_snapshot(scenario_name, timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"))
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_path = self.results_dir / f"{scenario_name}_{mode}_{timestamp}.csv"
+        json_path = self.results_dir / f"{scenario_name}_{mode}_{timestamp}.json"
+        collector.export_to_csv(str(csv_path))
+        collector.export_to_json(str(json_path))
+
+        return {
+            'scenario': scenario.name,
+            'mode': mode,
+            'session_id': session_id,
+            'summary': result['summary'],
+            'csv_file': str(csv_path),
+            'json_file': str(json_path),
+        }
+
     # ── Run single mode ────────────────────────────────────────────────
 
     async def _run_mode(
@@ -173,6 +234,13 @@ class BenchmarkRunner:
         collector.start_session()
         retrieval_eval.reset()
         perf_monitor.reset()
+
+        # Measuring VRAM baseline before any work
+        vram_baseline_gb = 0.0
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            vram_baseline_gb = torch.cuda.memory_allocated() / (1024 ** 3)
+            logger.info(f"  [{mode_name}] VRAM baseline: {vram_baseline_gb:.4f} GB (subtracted from measurements)")
 
         questions, answers = [], []
         retrieved_chunks_list, ground_truth_chunks_list, ground_truth_answers = [], [], []
@@ -192,6 +260,11 @@ class BenchmarkRunner:
                 baseline_mode=baseline_mode, run_id=run_id,
             )
 
+            # Subtracting VRAM baseline
+            result['vram_allocated_gb'] = max(0.0, result['vram_allocated_gb'] - vram_baseline_gb)
+            result['vram_reserved_gb'] = max(0.0, result['vram_reserved_gb'] - vram_baseline_gb)
+            result['vram_peak_gb'] = max(0.0, result['vram_peak_gb'] - vram_baseline_gb)
+
             collector.record_turn(result)
             questions.append(turn.query)
             answers.append(result['response'])
@@ -209,6 +282,9 @@ class BenchmarkRunner:
                         f"swap={result.get('latency_swap_ms', 0):.0f}, "
                         f"inference={result.get('latency_inference_ms', 0):.0f})")
             logger.info(f"    VRAM: alloc={result['vram_allocated_gb']:.3f} GB, peak={result['vram_peak_gb']:.3f} GB")
+            logger.info(f"    RAM: {result.get('ram_used_gb', 0):.2f} GB ({result.get('ram_percent', 0):.1f}%), "
+                        f"Disk: {result.get('disk_used_gb', 0):.1f} GB ({result.get('disk_percent', 0):.1f}%), "
+                        f"Process RSS: {result.get('process_rss_mb', 0):.1f} MB")
             logger.info(f"    Graph: {result['graph_nodes']} nodes, {result['graph_edges']} edges")
             logger.info(f"    Swap: {result['swap_operations']} ops, Cache hit: {result['cache_hit_rate']:.3f}")
 
@@ -267,6 +343,8 @@ class BenchmarkRunner:
 
             vram_after = vram_info.get('after_inference', {})
 
+            sys_res = metadata.get('system_resources', {})
+
             return {
                 'query': query,
                 'response': chat_result.get('response', ''),
@@ -280,6 +358,12 @@ class BenchmarkRunner:
                 'vram_allocated_gb': vram_after.get('allocated_gb', 0),
                 'vram_reserved_gb': vram_after.get('reserved_gb', 0),
                 'vram_peak_gb': vram_after.get('peak_gb', 0),
+                # System resources
+                'ram_used_gb': sys_res.get('ram', {}).get('used_gb', 0),
+                'ram_percent': sys_res.get('ram', {}).get('percent', 0),
+                'disk_used_gb': sys_res.get('disk', {}).get('used_gb', 0),
+                'disk_percent': sys_res.get('disk', {}).get('percent', 0),
+                'process_rss_mb': sys_res.get('process', {}).get('rss_mb', 0),
                 # Chunks
                 'active_chunks': metadata.get('context_chunks_used', 0),
                 'total_chunks': metadata.get('total_chunks_available', 0),
@@ -301,36 +385,18 @@ class BenchmarkRunner:
                 'ground_truth_answer': ground_truth_answer,
             }
         else:
-            # Fallback: mock
-            session_data['iteration'] += 1
-            iteration = session_data['iteration']
-            return {
-                'query': query,
-                'response': f"Mock response for: {query[:50]}...",
-                'latency_ms': (time.time() - start_time) * 1000,
-                'latency_search_ms': 0, 'latency_rerank_ms': 0,
-                'latency_swap_ms': 0, 'latency_inference_ms': 0,
-                'vram_allocated_gb': 0.0, 'vram_reserved_gb': 0.0, 'vram_peak_gb': 0.0,
-                'active_chunks': 5, 'total_chunks': 20,
-                'coverage_ratio': min(1.0, iteration * 0.25),
-                'cache_hit_rate': 0.0, 'cache_hits': 0, 'cache_misses': 0,
-                'swap_operations': 0, 'graph_nodes': 0, 'graph_edges': 0,
-                'retrieved_chunks': [],
-                'ground_truth_chunks': ground_truth_chunks,
-                'ground_truth_answer': ground_truth_answer,
-            }
+            raise RuntimeError(
+                "BenchmarkRunner requires a real chat_service. "
+                "Mock responses are forbidden in benchmarks because they would "
+                "produce fake metrics. Initialize BenchmarkRunner with a valid "
+                "ChatService instance before running scenarios."
+            )
 
     # ── Evaluation helpers ─────────────────────────────────────────────
 
     @staticmethod
     def _normalize_chunk_ids(chunk_ids: List[str]) -> List[str]:
-        """Normalize chunk IDs to comparable chunk-index form.
-
-        Scenario ground-truth uses labels like "chunk_001", "chunk_002".
-        Runtime IDs have the form "session_id:document_uuid:index".
-        We extract the trailing integer from both formats so they can be
-        compared on equal footing, e.g. both become "0", "1", "2", …
-        """
+        """Normalizing chunk IDs to comparable chunk-index form."""
         normalized = []
         for cid in chunk_ids:
             # Runtime format: "session_abc:doc-uuid:3"
@@ -366,55 +432,52 @@ class BenchmarkRunner:
         valid_results = [r for r in all_results if r['relevant_count'] > 0]
         n = len(valid_results) if valid_results else 1
 
-        # ── Text-based recall & precision: chunk-ID-independent ──────
-        # Both metrics use the scenario's `ground_truth_text` key phrase as
-        # the operationalization of "relevance":
-        #
-        #   Text Recall  = 1.0 if ANY retrieved chunk contains the phrase, else 0.0
-        #                  (binary: did the system find the relevant passage?)
-        #
-        #   Text Precision@K = (# retrieved chunks containing the phrase) / K
-        #                  (fraction of the retrieved set that is on-topic)
-        #
-        # These are standard IR definitions applied at the passage level.
-        # They are robust to chunking granularity and overlap because they
-        # match on surface text rather than on positional chunk IDs.
+        # ── Text Recall: chunk-ID-independent ────────────────────────
+        # Binary per-turn: 1.0 if ANY retrieved chunk contains the ground_truth_text phrase, else 0.0.
         text_recall_scores = []
-        text_precision_scores = []
         if retrieved_texts_list and ground_truth_texts_list:
             for turn_texts, gt_phrase in zip(retrieved_texts_list, ground_truth_texts_list):
                 if not gt_phrase:
                     continue
                 phrase_lower = gt_phrase.lower()
-                # Recall: at least one retrieved chunk contains the phrase
                 combined = ' '.join(turn_texts).lower()
                 text_recall_scores.append(1.0 if phrase_lower in combined else 0.0)
-                # Precision: fraction of retrieved chunks containing the phrase
-                if turn_texts:
-                    hits = sum(1 for t in turn_texts if phrase_lower in t.lower())
-                    text_precision_scores.append(hits / len(turn_texts))
 
         avg_text_recall = (
             sum(text_recall_scores) / len(text_recall_scores)
             if text_recall_scores else 0.0
         )
-        avg_text_precision = (
-            sum(text_precision_scores) / len(text_precision_scores)
-            if text_precision_scores else 0.0
+
+        # ── Semantic Similarity: embedding-based relevance ───────────
+        # For each turn, computing cosine similarity between the ground_truth_text and each retrieved chunk, then take the max.
+        semantic_sim_scores = []
+        if retrieved_texts_list and ground_truth_texts_list:
+            try:
+                from sentence_transformers import SentenceTransformer, util
+                _st_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+                for turn_texts, gt_phrase in zip(retrieved_texts_list, ground_truth_texts_list):
+                    if not gt_phrase or not turn_texts:
+                        continue
+                    gt_emb = _st_model.encode(gt_phrase, convert_to_tensor=True)
+                    chunk_embs = _st_model.encode(turn_texts, convert_to_tensor=True)
+                    sims = util.cos_sim(gt_emb, chunk_embs)[0]
+                    semantic_sim_scores.append(float(sims.max()))
+            except Exception as e:
+                logger.warning(f"Semantic similarity computation failed: {e}")
+
+        avg_semantic_similarity = (
+            sum(semantic_sim_scores) / len(semantic_sim_scores)
+            if semantic_sim_scores else 0.0
         )
 
         return {
-            'avg_recall': sum(r['avg_recall'] for r in valid_results) / n if valid_results else 0.0,
-            'avg_precision': sum(r['avg_precision'] for r in valid_results) / n if valid_results else 0.0,
             'avg_coverage': sum(r['coverage'] for r in valid_results) / n,
-            # Text-based metrics are the authoritative retrieval metrics when
-            # chunk-ID alignment with ground truth cannot be guaranteed.
             'avg_text_recall': round(avg_text_recall, 4),
             'text_recall_turns': len(text_recall_scores),
             'text_recall_hits': sum(text_recall_scores),
-            'avg_text_precision': round(avg_text_precision, 4),
-            'text_precision_turns': len(text_precision_scores),
-            'per_turn_results': valid_results,
+            'avg_semantic_similarity': round(avg_semantic_similarity, 4),
+            'semantic_similarity_turns': len(semantic_sim_scores),
             'total_turns': len(valid_results),
         }
 
@@ -461,11 +524,8 @@ class BenchmarkRunner:
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'total_turns': sgas_summary.get('total_turns', 0),
             'quality_metrics': {
-                'recall_at_k': _delta(sgas_ret.get('avg_recall', 0), base_ret.get('avg_recall', 0)),
                 'text_recall': _delta(sgas_ret.get('avg_text_recall', 0), base_ret.get('avg_text_recall', 0)),
-                # Text-based Precision@K: fraction of retrieved chunks containing the
-                # ground_truth_text key phrase.  Replaces the broken chunk-ID version.
-                'precision': _delta(sgas_ret.get('avg_text_precision', 0), base_ret.get('avg_text_precision', 0)),
+                'semantic_similarity': _delta(sgas_ret.get('avg_semantic_similarity', 0), base_ret.get('avg_semantic_similarity', 0)),
                 'coverage': _delta(sgas_summary.get('final_coverage', 0), baseline_summary.get('final_coverage', 0)),
                 'multi_turn_accuracy': _delta(
                     sgas_gen.get('multi_turn_accuracy', 0),
@@ -481,9 +541,9 @@ class BenchmarkRunner:
                     sgas_summary.get('avg_latency_excl_first_ms', 0),
                     baseline_summary.get('avg_latency_excl_first_ms', 0),
                 ),
-                'peak_vram_gb': _delta_lower_better(
-                    sgas_summary.get('peak_vram_gb', 0),
-                    baseline_summary.get('peak_vram_gb', 0),
+                'avg_vram_gb': _delta_lower_better(
+                    sgas_summary.get('avg_vram_gb', 0),
+                    baseline_summary.get('avg_vram_gb', 0),
                 ),
                 'avg_cache_hit_rate': _delta(
                     sgas_summary.get('avg_cache_hit_rate', 0),
@@ -509,8 +569,7 @@ class BenchmarkRunner:
         """Generate a human-readable verdict of which approach wins per metric."""
         verdicts = {}
 
-        # Text-based recall (authoritative — chunk-ID recall is unreliable when
-        # chunking granularity does not exactly match the ground-truth labels)
+        # Text-based recall
         s_recall = sgas_ret.get('avg_text_recall') or sgas_ret.get('avg_recall', 0)
         b_recall = base_ret.get('avg_text_recall') or base_ret.get('avg_recall', 0)
         if s_recall > b_recall:
@@ -540,7 +599,7 @@ class BenchmarkRunner:
         else:
             verdicts['accuracy'] = f"Tie ({s_acc * 100:.1f}%)"
 
-        # Latency (lower is better; use steady-state avg to exclude warmup turn)
+        # Latency (lower is better; using steady-state avg to exclude warmup turn)
         s_lat = sgas.get('avg_latency_excl_first_ms') or sgas.get('avg_latency_ms', 0)
         b_lat = baseline.get('avg_latency_excl_first_ms') or baseline.get('avg_latency_ms', 0)
         if s_lat < b_lat:
@@ -550,7 +609,7 @@ class BenchmarkRunner:
         else:
             verdicts['latency'] = f"Tie ({s_lat:.0f}ms)"
 
-        # Overall
+        # Overall of GPU
         sgas_wins = sum(1 for v in verdicts.values() if 'S-GAS wins' in v)
         baseline_wins = sum(1 for v in verdicts.values() if 'Baseline wins' in v)
         if sgas_wins > baseline_wins:
@@ -563,7 +622,7 @@ class BenchmarkRunner:
         return verdicts
 
     def _log_comparison(self, comparison: Dict):
-        """Log comparison results to console."""
+        """Logging comparison results to console."""
         logger.info("=" * 60)
         logger.info("BENCHMARK COMPARISON: S-GAS vs Baseline")
         logger.info("=" * 60)
@@ -599,14 +658,46 @@ class BenchmarkRunner:
         }
         return session_id
 
+    def _cleanup_session(self, session_id: str) -> None:
+        """Removing a finished benchmark session's vector store chunks and in-memory state."""
+        try:
+            if self._chat_service is not None:
+                self._chat_service._vector_store.delete_session_chunks(session_id)
+                logger.info(f"Cleaned up vector store for session {session_id}")
+        except Exception as e:
+            logger.warning(f"Could not clean up session {session_id}: {e}")
+
+    def _save_graph_snapshot(self, scenario_name: str, timestamp: str) -> None:
+        """Persisting the current S-GAS knowledge graph to disk before it is reset."""
+        if self._chat_service is None:
+            return
+        try:
+            snapshot = self._chat_service.get_graph_snapshot()
+            node_count = len(snapshot.get('nodes', []))
+            if node_count == 0:
+                logger.warning("Graph snapshot skipped: graph is empty after S-GAS run")
+                return
+
+            # Always-current alias (used by the web endpoint as fallback)
+            latest_path = self.results_dir / "latest_sgas_graph.json"
+            with open(latest_path, 'w', encoding='utf-8') as f:
+                json.dump(snapshot, f, ensure_ascii=False, default=str)
+
+            # Timestamped archive copy
+            archive_path = self.results_dir / f"{scenario_name}_graph_{timestamp}.json"
+            with open(archive_path, 'w', encoding='utf-8') as f:
+                json.dump(snapshot, f, ensure_ascii=False, default=str)
+
+            logger.info(
+                f"Graph snapshot saved: {node_count} nodes, "
+                f"{len(snapshot.get('edges', []))} edges → {latest_path}"
+            )
+        except Exception as e:
+            logger.warning(f"Graph snapshot save failed: {e}")
+
     def _upload_document(self, session_id: str, doc_path: Path, document_processor,
                          chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None):
-        """Upload a document for benchmarking.
-
-        When the scenario declares ``chunk_size`` / ``chunk_overlap``, the
-        chunking service is temporarily patched so the production config is
-        not affected and real-time chat keeps its own settings.
-        """
+        """Uploading a document for benchmarking."""
         chunker = getattr(document_processor, '_chunker', None)
         orig_size = orig_overlap = None
         if chunker is not None and chunk_size is not None:

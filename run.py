@@ -60,13 +60,30 @@ def create_app(settings: Settings) -> FastAPI:
         use_gpu=False,
     )
 
-    scoring_service = ScoringService(alpha=settings['graph']['alpha'], beta=settings['graph']['beta'])
-    swap_service = SwapService(threshold=settings['swap']['threshold'], prefetch_count=settings['swap']['prefetch_count'], memory_check_interval_ms=settings['swap']['memory_check_interval'], max_gpu_memory_tokens=settings['vllm']['max_model_len'], debug_mode=settings['swap'].get('debug_mode', False), force_offload_on_iteration=settings['swap'].get('force_offload_on_iteration', -1))
+    graph_service.set_embedding_service(embedding_service)
+    graph_service.set_edge_top_p(graph_config.get('edge_top_p', 0.7))
+
+    reranker_config = settings.get('reranker', {})
+    retrieval_config = settings.get('retrieval', {})
+    scoring_service = ScoringService(
+        alpha=settings['graph']['alpha'],
+        beta=settings['graph']['beta'],
+        cross_encoder_model=reranker_config.get('cross_encoder_model', ''),
+        cross_encoder_top_n=reranker_config.get('cross_encoder_top_n', 15),
+        cross_encoder_weight=reranker_config.get('cross_encoder_weight', 0.0),
+        semantic_anchor_threshold=retrieval_config.get('semantic_anchor_threshold', 0.75),
+        min_return_chunks=retrieval_config.get('min_return_chunks', 3),
+        enable_dynamic_weights=retrieval_config.get('enable_dynamic_weights', False),
+        low_semantic_warning_threshold=retrieval_config.get('low_semantic_warning_threshold', 0.3),
+    )
+    swap_config = settings.get('swap', {})
+    swap_service = SwapService(threshold=swap_config['threshold'], prefetch_count=swap_config['prefetch_count'], memory_check_interval_ms=swap_config['memory_check_interval'], max_gpu_memory_tokens=settings['vllm']['max_model_len'], force_offload_on_iteration=swap_config.get('force_offload_on_iteration', -1), retain_top_centrality_pct=swap_config.get('retain_top_centrality_pct', 0.15), eviction_ram_threshold_gb=swap_config.get('eviction_ram_threshold_gb', 12.0))
     vllm_service = VLLMService(api_base=settings['vllm']['api_base'], model_name=settings['vllm']['model_name'], default_temperature=settings['vllm']['temperature'], default_top_p=settings['vllm']['top_p'], default_max_tokens=settings['vllm']['max_tokens'])
 
     kv_monitor = KVCacheMonitor()
 
-    chat_service = ChatService(embedding_service=embedding_service, vector_store=vector_store_service, chunker=chunking_service, graph_builder=graph_service, scorer=scoring_service, swap_manager=swap_service, vllm_client=vllm_service, prompt_config=settings.get('prompt', {}), model_name=settings['vllm']['model_name'], kv_monitor=kv_monitor)
+    chat_service = ChatService(embedding_service=embedding_service, vector_store=vector_store_service, chunker=chunking_service, graph_builder=graph_service, scorer=scoring_service, swap_manager=swap_service, vllm_client=vllm_service, prompt_config=settings.get('prompt', {}), model_name=settings['vllm']['model_name'], kv_monitor=kv_monitor, min_similarity_score=retrieval_config.get('min_similarity_score', 0.0), bm25_weight=retrieval_config.get('bm25_weight', 0.0), rrf_k=retrieval_config.get('rrf_k', 60), enable_sgas_filtering=retrieval_config.get('enable_sgas_filtering', True))
+    chat_service._exclude_used_chunks = retrieval_config.get('exclude_used_chunks', False)
 
     benchmark_runner = BenchmarkRunner(chat_service=chat_service, document_processor=document_processor_service)
 
@@ -76,7 +93,7 @@ def create_app(settings: Settings) -> FastAPI:
     document_ctrl = DocumentController(document_processor=document_processor_service, sessions=sessions)
     search_ctrl = SearchController(embedding_service=embedding_service, vector_store=vector_store_service, sessions=sessions)
     chat_ctrl = ChatController(chat_service=chat_service, sessions=sessions)
-    benchmark_ctrl = BenchmarkController(benchmark_runner=benchmark_runner, sessions=sessions, document_processor=document_processor_service)
+    benchmark_ctrl = BenchmarkController(benchmark_runner=benchmark_runner, sessions=sessions, document_processor=document_processor_service, graph_service=graph_service)
 
     # ── Lifespan ──────────────────────────────────────────────────────
     @asynccontextmanager
@@ -114,6 +131,7 @@ def create_app(settings: Settings) -> FastAPI:
                 "/api/benchmark/run/{scenario_name}",
                 "/api/benchmark/generate-report/{scenario_name}",
                 "/api/benchmark/results/{scenario_name}",
+                "/graph", "/api/graph/data",
             ],
         })
 
@@ -167,8 +185,16 @@ def create_app(settings: Settings) -> FastAPI:
         return await benchmark_ctrl.list_scenarios()
 
     @app.post("/api/benchmark/run/{scenario_name}")
-    async def run_benchmark(scenario_name: str, session_id: Optional[str] = None):
-        return await benchmark_ctrl.run_benchmark(scenario_name, session_id)
+    async def run_benchmark(scenario_name: str, session_id: Optional[str] = None,
+                            fresh_server: bool = False):
+        return await benchmark_ctrl.run_benchmark(scenario_name, session_id,
+                                                  fresh_server=fresh_server)
+
+    @app.post("/api/benchmark/run/{scenario_name}/{mode}")
+    async def run_single_benchmark(scenario_name: str, mode: str,
+                                   fresh_server: bool = False):
+        return await benchmark_ctrl.run_single_mode(scenario_name, mode,
+                                                    fresh_server=fresh_server)
 
     @app.post("/api/benchmark/generate-report/{scenario_name}")
     async def generate_report(scenario_name: str):
@@ -177,6 +203,14 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/benchmark/results/{scenario_name}")
     async def get_benchmark_results(scenario_name: str):
         return await benchmark_ctrl.get_benchmark_results(scenario_name)
+
+    @app.get("/graph")
+    async def graph_visualization_ui():
+        return await benchmark_ctrl.graph_ui()
+
+    @app.get("/api/graph/data")
+    async def get_graph_data():
+        return await benchmark_ctrl.get_graph_data()
 
     # ── Error handlers ────────────────────────────────────────────────
 

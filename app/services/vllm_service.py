@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class VLLMService(IVLLMClient):
-    def __init__(self, api_base: str, model_name: str, default_temperature: float = 0.7, default_top_p: float = 0.9, default_max_tokens: int = 512):
+    def __init__(self, api_base: str, model_name: str, default_temperature: float = 0.7, default_top_p: float = 0.9, default_max_tokens: int = 2048):
         self._api_base = api_base
         self._model_name = model_name
         self._default_temperature = default_temperature
@@ -73,3 +73,32 @@ class VLLMService(IVLLMClient):
     async def flush_cache(self) -> bool:
         logger.debug("vLLM cache flush skipped: isolation is handled by run_id prompt prefix")
         return False
+
+    async def force_restart(self) -> bool:
+        """Restart the vLLM server process to guarantee a clean KV-cache.
+
+        Sends a dummy high-temperature request to warm up the model, then
+        waits for health check to confirm the server is ready.
+        """
+        import asyncio
+        import subprocess
+
+        logger.info("Force-restarting vLLM server for clean KV-cache...")
+        try:
+            # Kill existing vLLM process
+            subprocess.run(["pkill", "-f", "vllm.entrypoints"], timeout=10)
+            await asyncio.sleep(3)
+
+            # Wait for vLLM to come back up (it may be managed by systemd/docker)
+            for attempt in range(30):
+                health = await self.check_health()
+                if health == "healthy":
+                    logger.info(f"vLLM server restarted and healthy (attempt {attempt+1})")
+                    return True
+                await asyncio.sleep(2)
+
+            logger.warning("vLLM server did not come back after restart")
+            return False
+        except Exception as e:
+            logger.warning(f"vLLM force restart failed: {e}")
+            return False

@@ -55,7 +55,7 @@ fi
 # 7a. spaCy models
 echo "7a) Downloading the spaCy models..."
 python -m spacy download en_core_web_sm
-python -m spacy download ru_core_news_lg
+python -m spacy download ru_core_news_md
 
 # 7b. Natasha model for NER
 echo "7b) Installing Natasha for Russian NER..."
@@ -64,6 +64,19 @@ pip install natasha yargy
 # 7c. YAKE
 echo "7c) Installing YAKE for keyword extraction..."
 pip install yake
+
+# 7d. BM25 for hybrid retrieval
+echo "7d) Installing rank-bm25 for hybrid retrieval..."
+SITE_PKG=$(python3 -c "import site; print(site.getsitepackages()[0])")
+pip install --no-cache-dir --target="$SITE_PKG" rank-bm25
+python3 -c "from rank_bm25 import BM25Okapi; print('  ✅ rank-bm25 import OK')" || {
+    echo "  ⚠️  rank-bm25 import failed, retrying with --force-reinstall..."
+    pip install --force-reinstall --no-cache-dir --target="$SITE_PKG" rank-bm25
+}
+
+# 7e. psutil for system resource monitoring
+echo "7e) Installing psutil for system resource monitoring..."
+pip install --no-cache-dir psutil
 
 # 8. Creating the directories
 echo "8) Creating the directories..."
@@ -74,9 +87,24 @@ mkdir -p logs
 mkdir -p tests/scenarios
 mkdir -p tests/documents
 
-# 9. Checking the installs
+# 9. Download the LLM model for offline use
 echo ""
-echo "9) Checking the installations..."
+echo "9) Downloading the LLM model for offline use..."
+MODEL_NAME=$(python3 -c "import json; print(json.load(open('cfg/system_params.json'))['vllm']['model_name'])")
+echo "   Model: $MODEL_NAME"
+python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id='${MODEL_NAME}',
+    cache_dir='models',
+    local_dir=None,
+)
+print('   Model downloaded successfully')
+"
+
+# 10. Checking the installs
+echo ""
+echo "10) Checking the installations..."
 python3 -c "import torch; print(f'✅ PyTorch: {torch.__version__}')"
 python3 -c "import torch; print(f'✅ CUDA is available: {torch.cuda.is_available()}')"
 python3 -c "import torch; print(f'✅ CUDA version: {torch.version.cuda}')" || true
@@ -86,10 +114,12 @@ python3 -c "import chromadb; print(f'✅ ChromaDB: {chromadb.__version__}')"
 python3 -c "import pymorphy3; print('✅ PyMorphy3: available')" 2>/dev/null || echo "⚠️ PyMorphy3: not found"
 python3 -c "import natasha; print('✅ Natasha: available')" 2>/dev/null || echo "⚠️ Natasha: not found"
 python3 -c "import yake; print('✅ YAKE: available')" 2>/dev/null || echo "⚠️ YAKE: not found"
+python3 -c "import psutil; print(f'✅ psutil: {psutil.__version__}')" 2>/dev/null || echo "⚠️ psutil: not found"
+python3 -c "from rank_bm25 import BM25Okapi; print('✅ rank-bm25: available')" 2>/dev/null || echo "⚠️ rank-bm25: not found (check install)"
 
-# 10. Installing the benchmark dependencies
+# 11. Installing the benchmark dependencies
 echo ""
-echo "10) Installing benchmark dependencies..."
+echo "11) Installing benchmark dependencies..."
 pip install rouge-score scipy seaborn jinja2 pytest pytest-asyncio pytest-cov evaluate
 
 echo ""
