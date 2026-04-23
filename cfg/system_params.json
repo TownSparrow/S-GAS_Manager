@@ -1,0 +1,70 @@
+{
+  "vllm": {
+    "model_name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+    "gpu_memory_utilization": 0.75,
+    "max_model_len": 8192,
+    "quantization": "awq_marlin",
+    "dtype": "auto",
+    "trust_remote_code": true,
+    "api_base": "http://localhost:8000/v1",
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "max_tokens": 2048
+  },
+  "embeddings": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "similarity_metric": "cosine"
+  },
+  "rag": {
+    "top_k": 5
+  },
+  "chunking": {
+    "max_chunk_size": 512,
+    "overlap_size": 50,
+    "similarity_treshold": 0.7
+  },
+  "database": {
+    "chroma_persist_dir": "data/chroma_db",
+    "collection_name": "documents"
+  },
+  "graph": {
+    "alpha": 0.7,
+    "beta": 0.3,
+    "use_entities": true,
+    "spacy_model": "ru_core_news_md",
+    "edge_top_p": 0.55
+  },
+  "reranker": {
+    "cross_encoder_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "cross_encoder_top_n": 20,
+    "cross_encoder_weight": 0.5
+  },
+  "prompt": {
+    "enable_context_limit": false,
+    "max_context_tokens": 5000
+  },
+  "swap": {
+    "threshold": 0.3,
+    "prefetch_count": 5,
+    "memory_check_interval": 100,
+    "force_offload_on_iteration": 1,
+    "retain_top_centrality_pct": 0.15,
+    "eviction_ram_threshold_gb": 12.0
+  },
+  "retrieval": {
+    "initial_top_k_multiplier": 3,
+    "exclude_used_chunks": false,
+    "min_similarity_score": 0.15,
+    "bm25_weight": 0.4,
+    "rrf_k": 30,
+    "enable_sgas_filtering": true,
+    "semantic_anchor_threshold": 0.70,
+    "min_return_chunks": 5,
+    "enable_dynamic_weights": true,
+    "low_semantic_warning_threshold": 0.3
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8080
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "game_dev_technical",
+  "description": "Technical aspects of game development: engines and optimization",
+  "document": "game_dev_technical.txt",
+  "baseline_mode": false,
+  "chunk_size": 100,
+  "chunk_overlap": 10,
+  "turns": [
+    {
+      "query": "What are the main differences between Unity and Unreal Engine?",
+      "ground_truth_chunks": ["chunk_001", "chunk_002"],
+      "ground_truth_answer": "Unity is known for its ease of use, C# scripting, and strong 2D/3D support for indie developers. Unreal Engine uses C++ and Blueprints, offers superior graphics out of the box, and is preferred for AAA titles. Unity has a more accessible learning curve while Unreal provides more powerful built-in tools."
+    },
+    {
+      "query": "How does level of detail (LOD) optimization work in game engines?",
+      "ground_truth_chunks": ["chunk_003", "chunk_004"],
+      "ground_truth_answer": "LOD optimization reduces polygon count and texture resolution for distant objects. The engine automatically switches between different detail levels based on camera distance. This maintains visual quality while improving performance by reducing draw calls and memory usage."
+    },
+    {
+      "query": "What is the purpose of occlusion culling in game development?",
+      "ground_truth_chunks": ["chunk_005", "chunk_006"],
+      "ground_truth_answer": "Occlusion culling prevents rendering of objects that are not visible to the camera because they are blocked by other objects. This significantly improves performance by reducing the number of draw calls and GPU workload, especially in complex indoor environments."
+    },
+    {
+      "query": "How do game engines handle memory management for large open worlds?",
+      "ground_truth_chunks": ["chunk_007", "chunk_008"],
+      "ground_truth_answer": "Game engines use streaming systems that load and unload assets dynamically based on player position. They employ techniques like chunk-based loading, asset pooling, and memory budgeting to keep only necessary data in RAM while maintaining seamless gameplay experience."
+    }
+  ]
+}
