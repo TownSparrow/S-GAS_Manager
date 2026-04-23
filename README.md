@@ -1,25 +1,26 @@
-# Semantic-Graph Adaptive Swapping Manager (S-GAS Manager)
+# Semantic-Graph Adaptive Scoring Manager (S-GAS Manager)
 [RU Version of README](https://github.com/TownSparrow/S-GAS_Manager/blob/main/README_ru.md)
 
 ## ⚠️ WARNING! ⚠️
-Current version is `v0.1.0-alpha.2`. Project is in development process! I don't recommend to use it in production-tasks yet!
+Current version is `v0.2.0-alpha.1`. Project is in active development! I don't recommend using it in production tasks yet!
 
 ## About the project
-This project is a prototype system that applies an adaptive data distribution algorithm with semantic-graph scoring of text fragments (chunks) when working with small language models (SLM). It allows language models with Retrieval-Augmented Generation (RAG) capabilities to handle large contexts by adaptively swapping chunks between GPU memory and system RAM. The system applies a semantic-graph evaluation of the value of each text fragment before every request in order to dynamically manage information on consumer-grade hardware.
+This project is a prototype system that applies a hybrid semantic-graph scoring algorithm for Retrieval-Augmented Generation (RAG) with small language models (SLM). The system combines vector search, knowledge graph analysis, and adaptive query classification to deliver high-quality retrieval results on consumer-grade hardware.
 
-The project and algorithm were developed by student Leonid Vorobyev as part of research work within the master’s program “Game Development Technologies” at the Game Development School of ITMO University.
+The project and algorithm were developed by student Leonid Vorobyev as part of research work within the master's program "Game Development Technologies" at the Game Development School of ITMO University.
 
 ### Scientific problem
 Small language models are limited by a fixed context window, which creates critical issues in:
-- multi-turn dialogues, where the model loses early context and generates contradictory answers;
-- RAG systems, where naive accumulation of chunks leads to GPU memory overflow;
-- working with long documents, where the model loses information in the middle of the context.
+- **Multi-turn dialogues**: the model loses early context and generates contradictory answers;
+- **RAG systems**: naive chunk accumulation leads to GPU memory overflow and retrieval quality degradation;
+- **Long documents**: the model loses information in the middle of the context (lost-in-the-middle effect);
+- **Query type adaptation**: uniform retrieval strategy ignores the difference between factual and analytical queries.
 
 ### Key components of the algorithm
 The algorithm consists of three main mechanisms:
-1. Semantic similarity between embeddings of the query and candidate fragments  
-2. Graph-based scoring through analysis of entities and their relations in a knowledge graph  
-3. Dynamic movement of fragments between VRAM and RAM based on the resulting scores  
+1. **Hybrid scoring formula**: s_i(q) = α·cos(e_q, e_i) + β·[1/(1+d_graph(c_i, q))]
+2. **Dynamic weight classification**: adaptive α/β weights based on query type (factual vs. analytical)
+3. **Multi-stage retrieval pipeline**: dense retrieval → graph expansion → cross-encoder reranking → hybrid fusion
 
 ### Core technologies
 | Component         | Technology             |
@@ -27,15 +28,19 @@ The algorithm consists of three main mechanisms:
 | Inference engine | vLLM (PagedAttention)  |
 | Embeddings       | Sentence-Transformers  |
 | Vector store     | ChromaDB (HNSW)        |
-| Knowledge graph  | NetworkX + spaCy       |
+| Knowledge graph  | NetworkX + spaCy/Natasha |
+| NER (Russian)    | Natasha + spaCy ru_core_news_md |
+| Keyword extraction | YAKE                   |
+| Reranking        | Cross-Encoder (ms-marco-MiniLM-L-6-v2) |
+| Hybrid retrieval | BM25 + RRF fusion      |
 | API              | FastAPI + Uvicorn      |
-| Memory management| PyTorch + CUDA         |
+| Dependency injection | Manual DI container  |
 
 ### Target outcomes
-1. Reduce VRAM consumption by 15–20% while preserving system quality  
-2. Improve Recall@K by 5–10% in multi-turn dialogue scenarios  
-3. Maintain interactive latency (<200 ms per token)  
-4. Enable operation with context sizes at least 2× larger than the physical GPU memory capacity  
+1. Improve Recall@K by 5–10% through hybrid semantic-graph scoring
+2. Achieve +2–6% recall gain on multi-turn dialogue scenarios with dynamic weights
+3. Maintain interactive latency (<200 ms per token for retrieval + generation)
+4. Enable operation with context sizes exceeding physical GPU memory capacity
 
 ## Quick start
 
@@ -61,14 +66,10 @@ chmod +x ./scripts/start_vllm_server.sh
 ./scripts/start_vllm_server.sh
 ```
 3. Wait for the system to start successfully.
-4. In the project root directory, open an additional terminal (without closing the previous one) and start the local API server:
-```bash
-source S-GAS_Manager_env/bin/activate
-uvicorn run:app --reload --host 0.0.0.0 --port 8080
-```
+4. An additional terminal is automatically opened in the project root folder without closing the previous one, and a script is launched to launch the local server API.
 5. After the API is successfully started, open the system page in your browser: **http://localhost:8080**
 
-## How to use the systen
+## How to use the system
 
 ### Via web UI
 1. To create a request, use the message input form. After entering your text, click the corresponding button to send it.
@@ -79,20 +80,22 @@ uvicorn run:app --reload --host 0.0.0.0 --port 8080
 - `/api/session/{session_id}/info` - information about the current session
 - `/api/session/{session_id}/documents` - information about documents used in the system
 - `/api/sgas-statistics` - overall state of the algorithm and system
+- `/api/benchmark/run/{dataset}` - run benchmark on specified dataset
 
 ### How to inspect and collect system logs
 1. Use the corresponding endpoints to view system usage statistics.
-2. The main log file with system state is stored in the  `logs`. The default file name is `session_metrics.jsonl`
+2. The main log file with system state is stored in the `logs` directory. The default file name is `session_metrics.jsonl`
 3. During system operation, service messages are also printed to the terminal.
 
 
 ### Possible issues and their solutions
-| Issue | Soluation |
+| Issue | Solution |
 |----------|---------|
 | vLLM does not start | Check CUDA support: `nvidia-smi` |
 | API does not respond | Make sure vLLM is using the correct port (8000) |
-| GPU out-of-memory | Decreese `gpu_memory_utilization` in `cfg/system_params.json` |
-| Graph is not built | Ensure the correct version of spaCy model is installed: `python -m spacy download ru_core_news_sm` (for Russian) |
+| GPU out-of-memory | Decrease `gpu_memory_utilization` in `cfg/system_params.json` |
+| Graph is not built | Ensure the correct version of spaCy model is installed: `python -m spacy download ru_core_news_md` (for Russian) |
+| NER fails for Russian | Install Natasha: `pip install natasha` |
 
 ## Architecture of system
 ```
@@ -105,10 +108,10 @@ S-GAS_MANAGER/
 │   ├── consts/                       # Constants and prompt templates
 │   ├── models/                       # Data models (Chunk, Document, Session, API schemas)
 │   ├── interfaces/                   # Service interfaces (contracts)
-│   ├── services/                     # Business logic (Embedding, VectorStore, Graph, Scoring, Swap, Chat)
-│   │   ├── _processors/             # NER and keyword extraction processors
-│   │   ├── monitoring/              # KV-cache monitoring
-│   │   └── testing/                 # Benchmark runner, metrics, evaluators
+│   ├── services/                     # Business logic (Embedding, VectorStore, Graph, Scoring, Chat)
+│   │   ├── _processors/              # NER and keyword extraction processors
+│   │   ├── monitoring/               # KV-cache monitoring
+│   │   └── testing/                  # Benchmark runner, metrics, evaluators
 │   ├── controllers/                  # Thin HTTP handlers (Session, Document, Search, Chat, Benchmark)
 │   ├── loaders/                      # Document loaders (PDF, Text, DOCX)
 │   └── utils/                        # Utilities (GPU, serialization, validation)
@@ -122,6 +125,26 @@ S-GAS_MANAGER/
 └── data/                             # Document and embedding storage (created automatically)
 
 ```
+
+## Benchmarking & Evaluation
+
+The project includes a comprehensive benchmarking system for evaluating retrieval quality:
+
+### Metrics
+- **Recall@K**: Ability to retrieve relevant chunks in top-K results
+- **Coverage**: Percentage of queries with at least one relevant chunk retrieved
+- **Text Recall**: Exact match quality of retrieved content
+- **Semantic Similarity**: Cosine similarity between query and retrieved embeddings
+- **Multi-turn Accuracy**: Consistency across dialogue turns
+- **Latency**: End-to-end response time (retrieval + generation)
+
+### Benchmark usability scenarios that are recommended to be configured manually in system_params.json
+- **Stress**: Minimal resources (gpu_memory_utilization: 0.5, max_tokens: 256)
+- **Optimal**: Balanced configuration (gpu_memory_utilization: 0.7, max_tokens: 512)
+- **Maximal**: Full resource utilization (gpu_memory_utilization: 0.85, max_tokens: 1024)
+
+### Datasets
+- **Baldur's Gate 3**: Multi-turn dialogue dataset based on the game narrative
 
 ## Contributing
 This is a research prototype and is under active development. If you encounter any issues:
