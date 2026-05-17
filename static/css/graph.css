@@ -1,0 +1,220 @@
+/* CSS for graph.html — Knowledge Graph Visualization */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ── Header ──────────────────────────────────────────────────────── */
+
+header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: #1a1d27;
+    border-bottom: 1px solid #2d3148;
+    flex-shrink: 0;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+header h1 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: #a5b4fc;
+    white-space: nowrap;
+}
+
+#stats-bar {
+    display: flex;
+    gap: 16px;
+    font-size: 0.78rem;
+    color: #94a3b8;
+    flex-wrap: wrap;
+}
+
+.stat-item span {
+    color: #e2e8f0;
+    font-weight: 600;
+}
+
+#controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* ── Legend ──────────────────────────────────────────────────────── */
+
+#legend {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+
+.legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 3px;
+    vertical-align: middle;
+}
+
+.chunk-dot   { background: #3b82f6; border: 1.5px solid #93c5fd; }
+.concept-dot { background: #f59e0b; border: 1.5px solid #fcd34d; }
+
+.legend-link { font-size: 0.72rem; }
+.semantic-label { color: #4f6ef7; }
+.common-label   { color: #7c3aed; }
+
+/* ── Buttons ─────────────────────────────────────────────────────── */
+
+button {
+    padding: 5px 14px;
+    border-radius: 6px;
+    border: 1px solid #374151;
+    background: #1e2130;
+    color: #cbd5e1;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background 0.15s;
+}
+
+button:hover { background: #2d3148; }
+
+a button {
+    text-decoration: none;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────── */
+
+#main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+#canvas-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+/* ── SVG & D3 Elements ───────────────────────────────────────────── */
+
+svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.arrow-head { fill: #3b4261; }
+
+.link {
+    stroke: #3b4261;
+    stroke-opacity: 0.6;
+}
+
+.link.semantic { stroke: #4f6ef7; stroke-dasharray: 4 2; }
+.link.concept  { stroke: #6b7280; }
+.link.common   { stroke: #7c3aed; }
+
+.node circle {
+    stroke-width: 1.5;
+    cursor: pointer;
+}
+
+.node.chunk   circle { fill: #3b82f6; stroke: #93c5fd; }
+.node.concept circle { fill: #f59e0b; stroke: #fcd34d; }
+
+.node.chunk.selected   circle { fill: #22d3ee; stroke: #67e8f9; }
+.node.concept.selected circle { fill: #fb923c; stroke: #fdba74; }
+
+.node text {
+    font-size: 9px;
+    fill: #cbd5e1;
+    pointer-events: none;
+    text-anchor: middle;
+}
+
+/* ── Info Panel ──────────────────────────────────────────────────── */
+
+#info-panel {
+    width: 280px;
+    background: #1a1d27;
+    border-left: 1px solid #2d3148;
+    padding: 16px;
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+
+#info-panel h3 {
+    font-size: 0.85rem;
+    color: #a5b4fc;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+#node-detail {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    line-height: 1.6;
+}
+
+#node-detail .field   { margin-bottom: 6px; }
+#node-detail .label   { color: #64748b; font-size: 0.72rem; text-transform: uppercase; }
+#node-detail .value   { color: #e2e8f0; word-break: break-word; }
+
+.empty-hint {
+    color: #4b5563;
+    font-size: 0.78rem;
+    font-style: italic;
+}
+
+/* ── Loading / Error overlays ────────────────────────────────────── */
+
+#loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 17, 23, 0.85);
+    font-size: 0.9rem;
+    color: #64748b;
+    z-index: 10;
+}
+
+#error-msg {
+    display: none;
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #f87171;
+    font-size: 0.82rem;
+    padding: 8px 16px;
+    background: #1f1414;
+    border: 1px solid #7f1d1d;
+    border-radius: 6px;
+    z-index: 20;
+    white-space: nowrap;
+}

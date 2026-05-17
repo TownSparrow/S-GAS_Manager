@@ -1,0 +1,79 @@
+[Chunk 001] Client-server architecture is the most common networking model in multiplayer games. The server acts as the authoritative source of truth for game state.
+
+[Chunk 002] In client-server models, clients send input to the server, and the server broadcasts updated game state to all connected clients. This prevents cheating effectively.
+
+[Chunk 003] Peer-to-peer networking allows direct communication between players without a central server. Each peer maintains its own copy of the game state.
+
+[Chunk 004] P2P networking is vulnerable to cheating since each client has authority over its own state. It works well for small player counts but scales poorly.
+
+[Chunk 005] Latency is the delay between sending and receiving data over a network. It is measured in milliseconds and directly affects gameplay responsiveness.
+
+[Chunk 006] High latency causes lag, making actions feel delayed. Competitive games require latency below 100ms for acceptable performance.
+
+[Chunk 007] Packet loss occurs when data packets fail to reach their destination. This can cause stuttering, rubber-banding, or disconnections in multiplayer games.
+
+[Chunk 008] TCP guarantees packet delivery but adds overhead. UDP is faster but does not guarantee delivery, making it preferred for real-time games.
+
+[Chunk 009] Most multiplayer games use UDP for game state updates due to its lower latency. Critical data like purchases may still use TCP for reliability.
+
+[Chunk 010] Interpolation is a technique to smooth movement between received network updates. It creates the illusion of continuous motion despite packet delays.
+
+[Chunk 011] Extrapolation predicts where objects will be based on their current velocity. This helps mask latency but can cause errors if predictions are wrong.
+
+[Chunk 012] Client-side prediction allows players to see immediate results of their actions. The server later confirms or corrects these predictions.
+
+[Chunk 013] Lag compensation adjusts hit detection to account for network latency. This ensures fair combat even when players have different ping values.
+
+[Chunk 014] Server reconciliation corrects client predictions when they differ from server authority. This maintains consistency while preserving responsiveness.
+
+[Chunk 015] State synchronization keeps all clients updated with the current game state. This includes positions, health, inventory, and other mutable data.
+
+[Chunk 016] Delta compression sends only changed data between updates. This reduces bandwidth usage significantly compared to sending full state each frame.
+
+[Chunk 017] Snapshot interpolation stores recent game states for smoothing. Clients interpolate between snapshots to create fluid movement.
+
+[Chunk 018] Authority determines which machine controls specific game objects. Server-authoritative models prevent most forms of cheating and exploitation.
+
+[Chunk 019] Client authority allows faster response times but opens vulnerability to cheats. It is sometimes used for non-critical systems like cosmetics.
+
+[Chunk 020] Dedicated servers run independently of player machines. They provide consistent performance and are not affected by player hardware or connections.
+
+[Chunk 021] Listen servers run on one player's machine while they play. This saves costs but gives the host potential advantages and reliability issues.
+
+[Chunk 022] Matchmaking systems pair players based on skill, latency, and preferences. Good matchmaking improves player retention and game quality.
+
+[Chunk 023] Skill-based matchmaking (SBMM) groups players of similar ability. This creates balanced matches but can increase queue times.
+
+[Chunk 024] Region-based matchmaking prioritizes low-latency connections. Players are matched with others in nearby geographic regions.
+
+[Chunk 025] Connection pooling maintains persistent connections to reduce overhead. This is important for games with frequent login/logout cycles.
+
+[Chunk 026] Heartbeat signals are periodic messages that confirm a connection is alive. Missing heartbeats trigger reconnection or disconnection procedures.
+
+[Chunk 027] NAT traversal allows connections through network address translation. Techniques like STUN, TURN, and ICE help establish direct peer connections.
+
+[Chunk 028] Port forwarding may be required for some P2P games. This allows external connections to reach a player's machine through their router.
+
+[Chunk 029] DDoS protection is critical for multiplayer game servers. Attacks can take servers offline, affecting all connected players.
+
+[Chunk 030] Rate limiting prevents abuse by restricting message frequency. This protects servers from spam and potential denial-of-service attacks.
+
+[Chunk 031] Encryption secures network traffic from interception and tampering. TLS and DTLS are commonly used for protecting sensitive game data.
+
+[Chunk 032] Authentication verifies player identity before allowing connections. This prevents unauthorized access and protects player accounts.
+
+[Chunk 033] Session management tracks active player connections and game instances. Proper session handling prevents conflicts and data corruption.
+
+[Chunk 034] Lobby systems allow players to gather before starting matches. They handle player readiness, settings configuration, and team assignments.
+
+[Chunk 035] Voice chat requires separate audio streaming infrastructure. It typically uses different codecs and bandwidth than game state data.
+
+[Chunk 036] Cross-platform play requires unified networking protocols. Different platforms may have different network restrictions and requirements.
+
+[Chunk 037] Cloud gaming streams game video instead of game state. This shifts processing to servers but requires very low latency connections.
+
+[Chunk 038] Rollback networking is used in fighting games for precise inputs. It rewinds and re-simulates game state when input delays are detected.
+
+[Chunk 039] Bandwidth optimization reduces data transmission requirements. Techniques include compression, prioritization, and adaptive quality settings.
+
+[Chunk 040] Network profiling tools help identify bottlenecks and issues. They measure latency, packet loss, and throughput to diagnose problems.
