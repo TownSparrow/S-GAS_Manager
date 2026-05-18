@@ -20,7 +20,7 @@ BENCHMARK_MODE_ORDER = ["baseline", "hybrid_rag", "sgas_no_filtering", "sgas"]
 BENCHMARK_MODE_LABELS = {
     "baseline": "Baseline: semantic RAG",
     "hybrid_rag": "Ablation: hybrid RAG",
-    "sgas_no_filtering": "Ablation: S-GAS without filtering",
+    "sgas_no_filtering": "Ablation: S-GAS graph ranking only",
     "sgas": "Full S-GAS",
 }
 
@@ -53,6 +53,13 @@ class BenchmarkRunner:
 
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.documents_dir.mkdir(parents=True, exist_ok=True)
+        self._benchmark_max_tokens = None
+        try:
+            from config import Settings
+            benchmark_config = Settings().get("benchmark", {})
+            self._benchmark_max_tokens = benchmark_config.get("max_tokens")
+        except Exception:
+            self._benchmark_max_tokens = None
 
         from .scenario_loader import ScenarioLoader
         from .metrics_collector import MetricsCollector
@@ -75,6 +82,7 @@ class BenchmarkRunner:
         self._baseline_retrieval = self._retrieval_evaluators["baseline"]
         self._sgas_perf = self._perf_monitors["sgas"]
         self._baseline_perf = self._perf_monitors["baseline"]
+        self._progress: Dict[str, Dict[str, Any]] = {}
 
         logger.info("BenchmarkRunner initialized")
 
@@ -83,6 +91,64 @@ class BenchmarkRunner:
         self._document_processor = document_processor
 
     # ── Public API ─────────────────────────────────────────────────────
+
+    def get_progress(self, scenario_name: str) -> Dict[str, Any]:
+        return self._progress.get(
+            scenario_name,
+            {
+                "status": "idle",
+                "scenario": scenario_name,
+                "phase": "idle",
+                "percent": 0,
+                "message": "No benchmark is running.",
+            },
+        )
+
+    def _set_progress(
+        self,
+        scenario_name: str,
+        *,
+        status: str = "running",
+        phase: str,
+        percent: float,
+        message: str,
+        mode: Optional[str] = None,
+        turn: int = 0,
+        total_turns: int = 0,
+    ) -> None:
+        self._progress[scenario_name] = {
+            "status": status,
+            "scenario": scenario_name,
+            "phase": phase,
+            "mode": mode,
+            "turn": turn,
+            "total_turns": total_turns,
+            "percent": max(0, min(100, round(percent, 1))),
+            "message": message,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _set_mode_progress(
+        self,
+        scenario_name: str,
+        mode_name: str,
+        turn: int,
+        total_turns: int,
+        phase: str = "turn",
+    ) -> None:
+        mode_index = BENCHMARK_MODE_ORDER.index(mode_name) if mode_name in BENCHMARK_MODE_ORDER else 0
+        steps_total = max(1, len(BENCHMARK_MODE_ORDER) * max(1, total_turns))
+        steps_done = mode_index * max(1, total_turns) + max(0, turn - 1)
+        percent = (steps_done / steps_total) * 100
+        self._set_progress(
+            scenario_name,
+            phase=phase,
+            mode=mode_name,
+            turn=turn,
+            total_turns=total_turns,
+            percent=percent,
+            message=f"{BENCHMARK_MODE_LABELS.get(mode_name, mode_name)}: turn {turn}/{total_turns}",
+        )
 
     async def _reset_and_flush(self, label: str, fresh_server: bool = False):
         """Reset of stateful services and optionally restart vLLM."""
@@ -110,6 +176,11 @@ class BenchmarkRunner:
                 "baseline_mode": True,
                 "bm25_weight": 0.0,
                 "enable_sgas_filtering": False,
+                "enable_graph_expansion_filter": False,
+                "enable_cross_encoder_rerank": False,
+                "enable_dynamic_scoring_weights": False,
+                "enable_semantic_anchor": False,
+                "enable_keyword_boost": False,
                 "save_graph": False,
             },
             "hybrid_rag": {
@@ -118,6 +189,11 @@ class BenchmarkRunner:
                 "baseline_mode": True,
                 "bm25_weight": hybrid_weight,
                 "enable_sgas_filtering": False,
+                "enable_graph_expansion_filter": False,
+                "enable_cross_encoder_rerank": False,
+                "enable_dynamic_scoring_weights": False,
+                "enable_semantic_anchor": False,
+                "enable_keyword_boost": False,
                 "save_graph": False,
             },
             "sgas_no_filtering": {
@@ -126,6 +202,11 @@ class BenchmarkRunner:
                 "baseline_mode": False,
                 "bm25_weight": original_bm25,
                 "enable_sgas_filtering": False,
+                "enable_graph_expansion_filter": False,
+                "enable_cross_encoder_rerank": False,
+                "enable_dynamic_scoring_weights": False,
+                "enable_semantic_anchor": False,
+                "enable_keyword_boost": False,
                 "save_graph": True,
             },
             "sgas": {
@@ -134,6 +215,11 @@ class BenchmarkRunner:
                 "baseline_mode": False,
                 "bm25_weight": original_bm25,
                 "enable_sgas_filtering": True,
+                "enable_graph_expansion_filter": True,
+                "enable_cross_encoder_rerank": True,
+                "enable_dynamic_scoring_weights": True,
+                "enable_semantic_anchor": True,
+                "enable_keyword_boost": True,
                 "save_graph": True,
             },
         }
@@ -148,10 +234,20 @@ class BenchmarkRunner:
         saved = {
             "bm25_weight": getattr(self._chat_service, "_bm25_weight", 0.0),
             "enable_sgas_filtering": getattr(self._chat_service, "_enable_sgas_filtering", True),
+            "enable_graph_expansion_filter": getattr(self._chat_service, "_enable_graph_expansion_filter", True),
+            "enable_cross_encoder_rerank": getattr(self._chat_service, "_enable_cross_encoder_rerank", True),
+            "enable_dynamic_scoring_weights": getattr(self._chat_service, "_enable_dynamic_scoring_weights", True),
+            "enable_semantic_anchor": getattr(self._chat_service, "_enable_semantic_anchor", True),
+            "enable_keyword_boost": getattr(self._chat_service, "_enable_keyword_boost", True),
             "exclude_used_chunks": getattr(self._chat_service, "_exclude_used_chunks", False),
         }
         self._chat_service._bm25_weight = mode_spec["bm25_weight"]
         self._chat_service._enable_sgas_filtering = mode_spec["enable_sgas_filtering"]
+        self._chat_service._enable_graph_expansion_filter = mode_spec["enable_graph_expansion_filter"]
+        self._chat_service._enable_cross_encoder_rerank = mode_spec["enable_cross_encoder_rerank"]
+        self._chat_service._enable_dynamic_scoring_weights = mode_spec["enable_dynamic_scoring_weights"]
+        self._chat_service._enable_semantic_anchor = mode_spec["enable_semantic_anchor"]
+        self._chat_service._enable_keyword_boost = mode_spec["enable_keyword_boost"]
         self._chat_service._exclude_used_chunks = False
         return saved
 
@@ -160,6 +256,11 @@ class BenchmarkRunner:
             return
         self._chat_service._bm25_weight = saved["bm25_weight"]
         self._chat_service._enable_sgas_filtering = saved["enable_sgas_filtering"]
+        self._chat_service._enable_graph_expansion_filter = saved["enable_graph_expansion_filter"]
+        self._chat_service._enable_cross_encoder_rerank = saved["enable_cross_encoder_rerank"]
+        self._chat_service._enable_dynamic_scoring_weights = saved["enable_dynamic_scoring_weights"]
+        self._chat_service._enable_semantic_anchor = saved["enable_semantic_anchor"]
+        self._chat_service._enable_keyword_boost = saved["enable_keyword_boost"]
         self._chat_service._exclude_used_chunks = saved["exclude_used_chunks"]
 
     async def run_scenario(
@@ -176,6 +277,13 @@ class BenchmarkRunner:
             raise ValueError("document_processor is required")
 
         scenario = self.scenario_loader.load_scenario(scenario_name)
+        self._set_progress(
+            scenario_name,
+            phase="prepare",
+            percent=1,
+            message=f"Preparing {scenario.name}: loading scenario and document",
+            total_turns=len(scenario.turns),
+        )
         logger.info(f"=== Benchmark: {scenario.name} ({len(scenario.turns)} turns) ===")
         logger.info(f"Document: {scenario.document}")
 
@@ -188,6 +296,7 @@ class BenchmarkRunner:
 
         for mode in BENCHMARK_MODE_ORDER:
             mode_spec = self._get_mode_spec(mode)
+            self._set_mode_progress(scenario_name, mode, 1, len(scenario.turns), phase="mode_start")
             await self._reset_and_flush(f"{mode_spec['label']} run", fresh_server=fresh_server)
             logger.info(f"── Mode: {mode_spec['label']} ──")
 
@@ -203,6 +312,7 @@ class BenchmarkRunner:
                     retrieval_eval=self._retrieval_evaluators[mode],
                     perf_monitor=self._perf_monitors[mode],
                     run_id=uuid.uuid4().hex,
+                    progress_scenario_name=scenario_name,
                 )
             finally:
                 self._restore_mode_overrides(saved_overrides)
@@ -225,6 +335,13 @@ class BenchmarkRunner:
                 "json_file": str(json_path),
             }
 
+        self._set_progress(
+            scenario_name,
+            phase="report",
+            percent=96,
+            message="Generating comparison JSON and DOCX summary report",
+            total_turns=len(scenario.turns),
+        )
         comparison = self._compare_mode_results({m: r["summary"] for m, r in mode_results.items()})
         comparison_json = self.results_dir / f"{scenario_name}_comparison_{timestamp}.json"
         docx_report = self.results_dir / f"{scenario_name}_summary_report_{timestamp}.docx"
@@ -242,8 +359,23 @@ class BenchmarkRunner:
         logger.info(f"Benchmark completed! Comparison: {comparison_json}")
         logger.info(f"Benchmark DOCX report: {docx_report}")
         self._log_comparison(comparison)
+        overall_status = (
+            "success"
+            if all(r.get("summary", {}).get("status") == "completed" for r in mode_results.values())
+            else "partial_failed"
+        )
+
+        self._set_progress(
+            scenario_name,
+            status=overall_status,
+            phase="completed",
+            percent=100,
+            message="Benchmark completed" if overall_status == "success" else "Benchmark completed with partial failures",
+            total_turns=len(scenario.turns),
+        )
 
         return {
+            'status': overall_status,
             'scenario': scenario.name,
             'modes': mode_results,
             # Backward-compatible aliases.
@@ -269,6 +401,14 @@ class BenchmarkRunner:
 
         mode_spec = self._get_mode_spec(mode)
         scenario = self.scenario_loader.load_scenario(scenario_name)
+        self._set_progress(
+            scenario_name,
+            phase="prepare",
+            mode=mode,
+            percent=1,
+            message=f"Preparing {scenario.name}: {mode_spec['label']}",
+            total_turns=len(scenario.turns),
+        )
         logger.info(f"=== Single-mode Benchmark: {scenario.name} ({mode}) ===")
 
         doc_path = self.documents_dir / scenario.document
@@ -293,6 +433,7 @@ class BenchmarkRunner:
                 mode_spec=mode_spec, collector=collector,
                 retrieval_eval=retrieval_eval, perf_monitor=perf_monitor,
                 run_id=run_id,
+                progress_scenario_name=scenario_name,
             )
         finally:
             self._restore_mode_overrides(saved_overrides)
@@ -306,8 +447,18 @@ class BenchmarkRunner:
         json_path = self.results_dir / f"{scenario_name}_{mode}_{timestamp}.json"
         collector.export_to_csv(str(csv_path))
         collector.export_to_json(str(json_path))
+        self._set_progress(
+            scenario_name,
+            status=result['summary'].get('status', 'completed'),
+            phase="completed",
+            mode=mode,
+            percent=100,
+            message=f"{mode_spec['label']} completed",
+            total_turns=len(scenario.turns),
+        )
 
         return {
+            'status': result['summary'].get('status', 'completed'),
             'scenario': scenario.name,
             'mode': mode,
             'label': mode_spec['label'],
@@ -323,6 +474,7 @@ class BenchmarkRunner:
         self, scenario, sessions, session_id, mode_spec,
         collector, retrieval_eval, perf_monitor,
         run_id: Optional[str] = None,
+        progress_scenario_name: Optional[str] = None,
     ) -> Dict:
         mode_name = mode_spec["mode"]
         baseline_mode = mode_spec["baseline_mode"]
@@ -343,8 +495,17 @@ class BenchmarkRunner:
         retrieved_texts_list, ground_truth_texts_list = [], []
         evidence_texts_list = []
         total_chunks_per_turn = []
+        failed_turn = None
+        failure_error = ""
 
         for i, turn in enumerate(scenario.turns):
+            if progress_scenario_name:
+                self._set_mode_progress(
+                    progress_scenario_name,
+                    mode_name,
+                    i + 1,
+                    len(scenario.turns),
+                )
             logger.info(f"  [{mode_name}] Turn {i + 1}/{len(scenario.turns)}: {turn.query[:60]}...")
 
             gt_chunks = turn.ground_truth if turn.ground_truth else []
@@ -352,11 +513,41 @@ class BenchmarkRunner:
             gt_text = turn.ground_truth_text if turn.ground_truth_text else ""
             evidence_texts = self._get_turn_evidence_texts(turn)
 
-            result = await self._run_turn(
-                session_id=session_id, sessions=sessions, query=turn.query,
-                ground_truth_chunks=gt_chunks, ground_truth_answer=gt_answer,
-                baseline_mode=baseline_mode, run_id=run_id,
-            )
+            perf_monitor.start_timing('turn')
+            try:
+                result = await self._run_turn(
+                    session_id=session_id, sessions=sessions, query=turn.query,
+                    ground_truth_chunks=gt_chunks, ground_truth_answer=gt_answer,
+                    baseline_mode=baseline_mode, run_id=run_id,
+                )
+            except Exception as exc:
+                failed_turn = i + 1
+                failure_error = str(exc)
+                logger.error(
+                    "  [%s] Turn %s failed; saving partial benchmark data and stopping this mode: %s",
+                    mode_name,
+                    failed_turn,
+                    failure_error,
+                )
+                result = self._failed_turn_result(
+                    query=turn.query,
+                    ground_truth_chunks=gt_chunks,
+                    ground_truth_answer=gt_answer,
+                    error=failure_error,
+                    elapsed_ms=perf_monitor.end_timing('turn') * 1000,
+                )
+                collector.record_turn(result)
+                questions.append(turn.query)
+                answers.append("")
+                retrieved_chunks_list.append([])
+                ground_truth_chunks_list.append(gt_chunks)
+                ground_truth_answers.append(gt_answer)
+                retrieved_texts_list.append([])
+                ground_truth_texts_list.append(gt_text)
+                evidence_texts_list.append(evidence_texts)
+                total_chunks_per_turn.append(20)
+                await self._recover_vllm_after_failure(mode_name, failed_turn)
+                break
 
             # Subtracting VRAM baseline
             result['vram_allocated_gb'] = max(0.0, result['vram_allocated_gb'] - vram_baseline_gb)
@@ -426,6 +617,12 @@ class BenchmarkRunner:
         summary = collector.calculate_summary()
         summary['mode'] = mode_name
         summary['mode_label'] = mode_spec['label']
+        if failed_turn is not None:
+            summary['status'] = 'failed' if summary.get('total_turns', 0) == 0 else 'partial_failed'
+            summary['failed_turn'] = failed_turn
+            summary['error'] = failure_error
+        else:
+            summary['status'] = 'completed'
 
         # Retrieval evaluation
         retrieval_results = self._evaluate_retrieval(
@@ -446,6 +643,64 @@ class BenchmarkRunner:
 
         return {'session_id': session_id, 'summary': summary}
 
+    async def _recover_vllm_after_failure(self, mode_name: str, failed_turn: int) -> None:
+        if self._chat_service is None:
+            return
+        try:
+            health = await self._chat_service._vllm.check_health()
+            if health != "healthy":
+                logger.warning(
+                    "vLLM is %s after %s turn %s; attempting managed restart before the next task",
+                    health,
+                    mode_name,
+                    failed_turn,
+                )
+                await self._chat_service._vllm.force_restart()
+        except Exception as exc:
+            logger.warning("vLLM recovery check failed: %s", exc)
+
+    @staticmethod
+    def _failed_turn_result(
+        query: str,
+        ground_truth_chunks: List[str],
+        ground_truth_answer: str,
+        error: str,
+        elapsed_ms: float = 0,
+    ) -> Dict:
+        return {
+            'status': 'failed',
+            'error': error,
+            'query': query,
+            'response': '',
+            'latency_ms': elapsed_ms,
+            'latency_search_ms': 0,
+            'latency_rerank_ms': 0,
+            'latency_swap_ms': 0,
+            'latency_inference_ms': elapsed_ms,
+            'vram_allocated_gb': 0,
+            'vram_reserved_gb': 0,
+            'vram_peak_gb': 0,
+            'ram_used_gb': 0,
+            'ram_percent': 0,
+            'disk_used_gb': 0,
+            'disk_percent': 0,
+            'process_rss_mb': 0,
+            'active_chunks': 0,
+            'total_chunks': 0,
+            'coverage_ratio': 0,
+            'cache_hit_rate': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'swap_operations': 0,
+            'graph_nodes': 0,
+            'graph_edges': 0,
+            'retrieved_chunks': [],
+            'retrieved_chunk_texts': [],
+            'chunk_scores': [],
+            'ground_truth_chunks': ground_truth_chunks,
+            'ground_truth_answer': ground_truth_answer,
+        }
+
     # ── Turn execution ─────────────────────────────────────────────────
 
     async def _run_turn(
@@ -465,6 +720,7 @@ class BenchmarkRunner:
             chat_result = await self._chat_service.process_chat(
                 session_id=session_id, session_data=session_data,
                 message=query, use_rag=True, n_chunks=5, temperature=0.1,
+                max_tokens=self._benchmark_max_tokens,
                 baseline_mode=baseline_mode, run_id=run_id,
             )
 
@@ -491,6 +747,7 @@ class BenchmarkRunner:
                 'latency_rerank_ms': latency_info.get('rerank_ms', 0),
                 'latency_swap_ms': latency_info.get('swap_ms', 0),
                 'latency_inference_ms': latency_info.get('inference_ms', 0),
+                'latency_observability_ms': latency_info.get('observability_ms', 0),
                 # VRAM
                 'vram_allocated_gb': vram_after.get('allocated_gb', 0),
                 'vram_reserved_gb': vram_after.get('reserved_gb', 0),
@@ -832,9 +1089,47 @@ class BenchmarkRunner:
 
     def _compare_mode_results(self, summaries: Dict[str, Dict]) -> Dict:
         """Compare every ablation mode against the semantic baseline."""
+        mode_statuses = {
+            mode: {
+                "status": summaries.get(mode, {}).get("status", "unknown"),
+                "attempted_turns": summaries.get(mode, {}).get("attempted_turns", summaries.get(mode, {}).get("total_turns", 0)),
+                "successful_turns": summaries.get(mode, {}).get("total_turns", 0),
+                "failed_turns": summaries.get(mode, {}).get("failed_turns", 0),
+                "first_error": summaries.get(mode, {}).get("first_error", summaries.get(mode, {}).get("error", "")),
+            }
+            for mode in BENCHMARK_MODE_ORDER
+        }
         baseline = summaries["baseline"]
         full = summaries["sgas"]
+        comparison_ready = (
+            baseline.get("status") == "completed"
+            and full.get("status") == "completed"
+            and baseline.get("total_turns", 0) > 0
+            and full.get("total_turns", 0) > 0
+        )
+        if not comparison_ready:
+            return {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "incomplete",
+                "reason": "Comparison skipped because baseline or full S-GAS did not complete successfully.",
+                "mode_statuses": mode_statuses,
+                "baseline_mode": "baseline",
+                "mode_order": BENCHMARK_MODE_ORDER,
+                "mode_labels": BENCHMARK_MODE_LABELS,
+                "modes": {
+                    mode: {
+                        "label": BENCHMARK_MODE_LABELS[mode],
+                        "summary": summaries.get(mode, {}),
+                    }
+                    for mode in BENCHMARK_MODE_ORDER
+                },
+                "verdict": {
+                    "overall": "Incomplete benchmark; no valid S-GAS effectiveness verdict.",
+                },
+            }
         comparison = self._compare_results(full, baseline)
+        comparison["status"] = "completed"
+        comparison["mode_statuses"] = mode_statuses
         comparison["baseline_mode"] = "baseline"
         comparison["mode_order"] = BENCHMARK_MODE_ORDER
         comparison["mode_labels"] = BENCHMARK_MODE_LABELS

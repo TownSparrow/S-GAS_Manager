@@ -1,21 +1,22 @@
 {
   "profile": {
     "name": "google/gemma-4-E2B-it stress",
-    "description": "Very low usage text-only attempt. Gemma 4 E2B BF16 is not guaranteed below 4GB and relies heavily on CPU/KV offload."
+    "description": "Text-only Gemma 4 E2B-it stress preset with a 4k context window and unquantized vLLM settings."
   },
   "vllm": {
     "model_name": "google/gemma-4-E2B-it",
-    "gpu_memory_utilization": 0.5,
-    "max_model_len": 1024,
+    "gpu_memory_utilization": 0.65,
+    "max_model_len": 4096,
     "max_num_seqs": 1,
-    "max_num_batched_tokens": 1024,
-    "swap_space": 12,
-    "cpu_offload_gb": 14,
-    "kv_cache_dtype": "fp8",
-    "kv_offloading_size": 4,
+    "max_num_batched_tokens": 4096,
+    "swap_space": null,
+    "cpu_offload_gb": null,
+    "kv_cache_dtype": null,
+    "kv_offloading_size": null,
     "quantization": "",
     "dtype": "auto",
     "trust_remote_code": true,
+    "enforce_eager": true,
     "language_model_only": true,
     "limit_mm_per_prompt": {
       "image": 0,
@@ -25,7 +26,8 @@
     "api_base": "http://localhost:8000/v1",
     "temperature": 0.7,
     "top_p": 0.9,
-    "max_tokens": 256
+    "max_tokens": 512,
+    "request_timeout": 300
   },
   "embeddings": {
     "model": "sentence-transformers/all-MiniLM-L6-v2",
@@ -57,15 +59,18 @@
   },
   "prompt": {
     "enable_context_limit": true,
-    "max_context_tokens": 700
+    "max_context_tokens": 3000
   },
   "swap": {
+    "enabled": false,
     "threshold": 0.2,
     "prefetch_count": 2,
     "memory_check_interval": 150,
-    "force_offload_on_iteration": 1,
+    "force_offload_on_iteration": -1,
     "retain_top_centrality_pct": 0.1,
-    "eviction_ram_threshold_gb": 8.0
+    "eviction_ram_threshold_gb": 8.0,
+    "proactive_offload": false,
+    "gpu_pressure_free_ratio": 0.15
   },
   "retrieval": {
     "initial_top_k_multiplier": 2,
@@ -82,5 +87,8 @@
   "api": {
     "host": "0.0.0.0",
     "port": 8080
+  },
+  "benchmark": {
+    "max_tokens": 128
   }
 }

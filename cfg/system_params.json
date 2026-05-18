@@ -3,13 +3,16 @@
     "model_name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
     "gpu_memory_utilization": 0.75,
     "max_model_len": 8192,
+    "max_num_seqs": 1,
+    "max_num_batched_tokens": 8192,
     "quantization": "awq_marlin",
     "dtype": "auto",
     "trust_remote_code": true,
     "api_base": "http://localhost:8000/v1",
     "temperature": 0.7,
     "top_p": 0.9,
-    "max_tokens": 2048
+    "max_tokens": 1024,
+    "request_timeout": 300
   },
   "embeddings": {
     "model": "sentence-transformers/all-MiniLM-L6-v2",
@@ -40,16 +43,19 @@
     "cross_encoder_weight": 0.5
   },
   "prompt": {
-    "enable_context_limit": false,
-    "max_context_tokens": 5000
+    "enable_context_limit": true,
+    "max_context_tokens": 6500
   },
   "swap": {
+    "enabled": false,
     "threshold": 0.3,
     "prefetch_count": 5,
     "memory_check_interval": 100,
-    "force_offload_on_iteration": 1,
+    "force_offload_on_iteration": -1,
     "retain_top_centrality_pct": 0.15,
-    "eviction_ram_threshold_gb": 12.0
+    "eviction_ram_threshold_gb": 12.0,
+    "proactive_offload": false,
+    "gpu_pressure_free_ratio": 0.15
   },
   "retrieval": {
     "initial_top_k_multiplier": 3,
@@ -66,5 +72,8 @@
   "api": {
     "host": "0.0.0.0",
     "port": 8080
+  },
+  "benchmark": {
+    "max_tokens": 128
   }
 }

@@ -2,12 +2,13 @@
 
 let currentScenario = null;
 let lastResult = null;
+let progressTimer = null;
 
 const MODE_ORDER = ['baseline', 'hybrid_rag', 'sgas_no_filtering', 'sgas'];
 const MODE_LABELS = {
     baseline: 'Baseline Semantic RAG',
     hybrid_rag: 'Hybrid RAG',
-    sgas_no_filtering: 'S-GAS No Filtering',
+    sgas_no_filtering: 'S-GAS Graph Ranking',
     sgas: 'Full S-GAS',
 };
 
@@ -19,7 +20,12 @@ function switchTab(tabName, clickedEl) {
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.getElementById(`${tabName}-tab`).classList.add('active');
-    if (clickedEl) clickedEl.classList.add('active');
+    if (clickedEl) {
+        clickedEl.classList.add('active');
+    } else {
+        const tabIndex = { scenarios: 0, results: 1, reports: 2 }[tabName] || 0;
+        document.querySelectorAll('.tabs .tab')[tabIndex]?.classList.add('active');
+    }
     if (tabName === 'results' && lastResult) showResults(lastResult);
     if (tabName === 'reports') loadReports();
 }
@@ -46,12 +52,12 @@ function renderScenarios(scenarios) {
     el.innerHTML = scenarios.map(s => `
         <div class="scenario-card">
             <h3>${s}</h3>
-            <p>Runs semantic baseline, hybrid RAG, S-GAS without filtering, and full S-GAS.</p>
+            <p>Runs semantic baseline, hybrid RAG, S-GAS graph-only ablation, and full S-GAS.</p>
             <div class="button-group">
                 <button onclick="runBenchmark('${s}')">Run All Modes + DOCX</button>
                 <button class="secondary" onclick="runSingleMode('${s}', 'baseline')">Baseline</button>
                 <button class="secondary" onclick="runSingleMode('${s}', 'hybrid_rag')">Hybrid RAG</button>
-                <button class="secondary" onclick="runSingleMode('${s}', 'sgas_no_filtering')">S-GAS No Filtering</button>
+                <button class="secondary" onclick="runSingleMode('${s}', 'sgas_no_filtering')">S-GAS Graph Ranking</button>
                 <button class="secondary" onclick="runSingleMode('${s}', 'sgas')">Full S-GAS</button>
             </div>
         </div>
@@ -62,22 +68,20 @@ function renderScenarios(scenarios) {
 
 async function runBenchmark(scenarioName) {
     currentScenario = scenarioName;
-    const progress = document.getElementById('progress-section');
-    const bar = document.getElementById('progress-bar');
-    const info = document.getElementById('progress-info');
-    progress.style.display = 'block';
-    bar.style.width = '15%'; bar.textContent = '15%';
-    info.className = 'status info';
-    info.textContent = `Running ${scenarioName}: Baseline → Hybrid RAG → S-GAS no filtering → Full S-GAS...`;
+    startProgress(scenarioName, MODE_ORDER);
 
     try {
         const resp = await fetch(`/api/benchmark/run/${scenarioName}`, { method: 'POST' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
         const result = await resp.json();
-        if (result.status !== 'success') throw new Error(result.message || 'Benchmark failed');
+        if (!['success', 'partial_failed'].includes(result.status)) {
+            throw new Error(result.message || 'Benchmark failed');
+        }
 
-        bar.style.width = '100%'; bar.textContent = '100%';
-        info.className = 'status success';
+        stopProgress();
+        setProgressBar(100);
+        const info = document.getElementById('progress-info');
+        info.className = result.status === 'success' ? 'status success' : 'status loading';
         info.textContent = result.report_file
             ? `Benchmark completed! DOCX report saved: ${result.report_file}`
             : 'Benchmark completed!';
@@ -85,6 +89,9 @@ async function runBenchmark(scenarioName) {
         showResults(result);
         switchTab('results');
     } catch (e) {
+        stopProgress();
+        const bar = document.getElementById('progress-bar');
+        const info = document.getElementById('progress-info');
         bar.style.width = '0%';
         info.className = 'status error';
         info.textContent = 'Error: ' + e.message;
@@ -94,31 +101,84 @@ async function runBenchmark(scenarioName) {
 
 async function runSingleMode(scenarioName, mode) {
     currentScenario = scenarioName;
-    const progress = document.getElementById('progress-section');
-    const bar = document.getElementById('progress-bar');
-    const info = document.getElementById('progress-info');
-    progress.style.display = 'block';
-    bar.style.width = '15%'; bar.textContent = '15%';
-    info.className = 'status info';
-    info.textContent = `Running ${scenarioName} (${mode.toUpperCase()} only)...`;
+    startProgress(scenarioName, [mode]);
 
     try {
         const resp = await fetch(`/api/benchmark/run/${scenarioName}/${mode}`, { method: 'POST' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
         const result = await resp.json();
-        if (result.status !== 'success') throw new Error(result.message || 'Benchmark failed');
+        if (!['success', 'completed', 'partial_failed'].includes(result.status)) {
+            throw new Error(result.message || 'Benchmark failed');
+        }
 
-        bar.style.width = '100%'; bar.textContent = '100%';
+        stopProgress();
+        setProgressBar(100);
+        const info = document.getElementById('progress-info');
         info.className = 'status success';
         info.textContent = `${mode.toUpperCase()} benchmark completed!`;
         showSingleResult(result);
         switchTab('results');
     } catch (e) {
+        stopProgress();
+        const bar = document.getElementById('progress-bar');
+        const info = document.getElementById('progress-info');
         bar.style.width = '0%';
         info.className = 'status error';
         info.textContent = 'Error: ' + e.message;
         console.error(e);
     }
+}
+
+function startProgress(scenarioName, modes) {
+    stopProgress();
+    const progress = document.getElementById('progress-section');
+    const info = document.getElementById('progress-info');
+    progress.style.display = 'block';
+    setProgressBar(1);
+    renderProgressSteps(modes, null);
+    info.className = 'status info';
+    info.textContent = `Starting ${scenarioName}...`;
+    progressTimer = setInterval(() => pollProgress(scenarioName, modes), 1200);
+    pollProgress(scenarioName, modes);
+}
+
+function stopProgress() {
+    if (progressTimer) clearInterval(progressTimer);
+    progressTimer = null;
+}
+
+async function pollProgress(scenarioName, modes) {
+    try {
+        const resp = await fetch(`/api/benchmark/progress/${scenarioName}`);
+        if (!resp.ok) return;
+        const progress = await resp.json();
+        setProgressBar(progress.percent || 0);
+        renderProgressSteps(modes, progress.mode, progress.status);
+        const info = document.getElementById('progress-info');
+        info.className = progress.status === 'failed' ? 'status error' : 'status info';
+        info.textContent = progress.message || 'Benchmark is running...';
+    } catch (e) {
+        console.debug('Progress polling skipped:', e);
+    }
+}
+
+function setProgressBar(percent) {
+    const bar = document.getElementById('progress-bar');
+    const pctValue = Math.max(0, Math.min(100, Number(percent || 0)));
+    const pctText = `${pctValue.toFixed(pctValue % 1 === 0 ? 0 : 1)}%`;
+    bar.style.width = `${pctValue}%`;
+    bar.textContent = pctText;
+}
+
+function renderProgressSteps(modes, activeMode, status = 'running') {
+    const el = document.getElementById('progress-steps');
+    const activeIndex = modes.indexOf(activeMode);
+    el.innerHTML = modes.map((mode, index) => {
+        const done = activeIndex > index || status === 'success' || status === 'completed';
+        const active = activeMode === mode;
+        const cls = done ? 'done' : active ? 'active' : '';
+        return `<div class="progress-step ${cls}">${MODE_LABELS[mode] || mode}</div>`;
+    }).join('');
 }
 
 function num(value, digits = 4) {
@@ -128,6 +188,10 @@ function num(value, digits = 4) {
 
 function pct(value) {
     return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+function pctScore(value) {
+    return pct(value);
 }
 
 function showSingleResult(result) {
@@ -153,20 +217,20 @@ function showSingleResult(result) {
                 <tr><td>Precision@5</td><td>${pct(ret.avg_precision_at_5 ?? s.avg_retrieval_precision_at_5)}</td></tr>
                 <tr><td>F1@5</td><td>${pct(ret.avg_f1_at_5 ?? s.avg_retrieval_f1_at_5)}</td></tr>
                 <tr><td>Hit@5</td><td>${pct(ret.avg_hit_at_5 ?? s.avg_retrieval_hit_at_5)}</td></tr>
-                <tr><td>MRR</td><td>${num(ret.avg_mrr ?? s.avg_retrieval_mrr)}</td></tr>
-                <tr><td>nDCG@5</td><td>${num(ret.avg_ndcg_at_5 ?? s.avg_retrieval_ndcg_at_5)}</td></tr>
-                <tr><td>MAP@5</td><td>${num(ret.avg_map_at_5 ?? s.avg_retrieval_map_at_5)}</td></tr>
+                <tr><td>MRR</td><td>${pctScore(ret.avg_mrr ?? s.avg_retrieval_mrr)}</td></tr>
+                <tr><td>nDCG@5</td><td>${pctScore(ret.avg_ndcg_at_5 ?? s.avg_retrieval_ndcg_at_5)}</td></tr>
+                <tr><td>MAP@5</td><td>${pctScore(ret.avg_map_at_5 ?? s.avg_retrieval_map_at_5)}</td></tr>
                 <tr><td>Evidence Recall@5</td><td>${pct(ret.avg_evidence_recall_at_5 ?? s.avg_evidence_recall_at_5)}</td></tr>
                 <tr><td>Evidence Hit@5</td><td>${pct(ret.avg_evidence_hit_at_5 ?? s.avg_evidence_hit_at_5)}</td></tr>
-                <tr><td>Evidence MRR</td><td>${num(ret.avg_evidence_mrr ?? s.avg_evidence_mrr)}</td></tr>
-                <tr><td>Evidence nDCG@5</td><td>${num(ret.avg_evidence_ndcg_at_5 ?? s.avg_evidence_ndcg_at_5)}</td></tr>
-                <tr><td>Evidence Token-F1@5</td><td>${num(ret.avg_evidence_token_f1_at_5 ?? s.avg_evidence_token_f1_at_5)}</td></tr>
+                <tr><td>Evidence MRR</td><td>${pctScore(ret.avg_evidence_mrr ?? s.avg_evidence_mrr)}</td></tr>
+                <tr><td>Evidence nDCG@5</td><td>${pctScore(ret.avg_evidence_ndcg_at_5 ?? s.avg_evidence_ndcg_at_5)}</td></tr>
+                <tr><td>Evidence Token-F1@5</td><td>${pctScore(ret.avg_evidence_token_f1_at_5 ?? s.avg_evidence_token_f1_at_5)}</td></tr>
                 <tr><td>Text Recall</td><td>${((ret.avg_text_recall || 0) * 100).toFixed(1)}%</td></tr>
                 <tr><td>Semantic Similarity</td><td>${((ret.avg_semantic_similarity || 0) * 100).toFixed(1)}%</td></tr>
                 <tr><td>Multi-turn Accuracy</td><td>${((gen.multi_turn_accuracy || 0) * 100).toFixed(1)}% (${gen.correct_turns || 0}/${gen.total_turns || 0})</td></tr>
-                <tr><td>Answer Semantic Similarity</td><td>${num(gen.avg_bertscore ?? s.avg_answer_semantic_similarity)}</td></tr>
-                <tr><td>Answer Token-F1</td><td>${num(gen.avg_token_f1 ?? s.avg_answer_token_f1)}</td></tr>
-                <tr><td>Answer ROUGE-L</td><td>${num(gen.avg_rougeL ?? s.avg_answer_rougeL)}</td></tr>
+                <tr><td>Answer Semantic Similarity</td><td>${pctScore(gen.avg_bertscore ?? s.avg_answer_semantic_similarity)}</td></tr>
+                <tr><td>Answer Token-F1</td><td>${pctScore(gen.avg_token_f1 ?? s.avg_answer_token_f1)}</td></tr>
+                <tr><td>Answer ROUGE-L</td><td>${pctScore(gen.avg_rougeL ?? s.avg_answer_rougeL)}</td></tr>
                 <tr><td>Answer Exact Match</td><td>${pct(gen.avg_exact_match ?? s.avg_answer_exact_match)}</td></tr>
                 <tr><td>Coverage</td><td>${((s.final_coverage || 0) * 100).toFixed(1)}%</td></tr>
             </tbody>
@@ -242,24 +306,24 @@ function showResults(result) {
                 ${renderRow('Precision@5', quality.precision_at_5, true)}
                 ${renderRow('F1@5', quality.f1_at_5, true)}
                 ${renderRow('Hit@5', quality.hit_at_5, true)}
-                ${renderRow('MRR', quality.mrr)}
-                ${renderRow('nDCG@5', quality.ndcg_at_5)}
-                ${renderRow('MAP@5', quality.map_at_5)}
+                ${renderRow('MRR', quality.mrr, true)}
+                ${renderRow('nDCG@5', quality.ndcg_at_5, true)}
+                ${renderRow('MAP@5', quality.map_at_5, true)}
                 ${renderRow('Evidence Recall@5', quality.evidence_recall_at_5, true)}
                 ${renderRow('Evidence Hit@5', quality.evidence_hit_at_5, true)}
-                ${renderRow('Evidence MRR', quality.evidence_mrr)}
-                ${renderRow('Evidence nDCG@5', quality.evidence_ndcg_at_5)}
-                ${renderRow('Evidence Token-F1@5', quality.evidence_token_f1_at_5)}
+                ${renderRow('Evidence MRR', quality.evidence_mrr, true)}
+                ${renderRow('Evidence nDCG@5', quality.evidence_ndcg_at_5, true)}
+                ${renderRow('Evidence Token-F1@5', quality.evidence_token_f1_at_5, true)}
                 ${renderRow('Text Recall', quality.text_recall, true)}
                 ${renderRow('Retrieval Semantic Similarity', quality.semantic_similarity, true)}
-                ${renderRow('Answer Token-F1', quality.answer_token_f1)}
-                ${renderRow('Answer ROUGE-L', quality.answer_rougeL)}
+                ${renderRow('Answer Token-F1', quality.answer_token_f1, true)}
+                ${renderRow('Answer ROUGE-L', quality.answer_rougeL, true)}
                 ${renderRow('Coverage', quality.coverage, true)}
                 ${renderRow('Multi-turn Accuracy', quality.multi_turn_accuracy, true)}
                 ${renderRow('Avg Latency (ms)', perf.avg_latency_ms)}
                 ${renderRow('Avg Latency excl. 1st turn (ms)', perf.avg_latency_excl_first_ms)}
                 ${renderRow('Avg VRAM Overhead (GB)', perf.avg_vram_gb)}
-                ${renderRow('Cache Hit Rate', perf.avg_cache_hit_rate)}
+                ${renderRow('Cache Hit Rate', perf.avg_cache_hit_rate, true)}
                 ${renderRow('vLLM KV Cache Usage', perf.avg_vllm_kv_cache_usage_after, true)}
                 ${renderRow('Generated tok/s', perf.avg_vllm_tokens_per_second)}
                 ${renderRow('GPU Utilization Avg', perf.avg_gpu_utilization_pct)}
@@ -290,19 +354,19 @@ function renderModeTable(modeOrder, modeComparison) {
         ['Precision@5', m => pct(m.quality?.precision_at_5)],
         ['F1@5', m => pct(m.quality?.f1_at_5)],
         ['Hit@5', m => pct(m.quality?.hit_at_5)],
-        ['MRR', m => num(m.quality?.mrr)],
-        ['nDCG@5', m => num(m.quality?.ndcg_at_5)],
-        ['MAP@5', m => num(m.quality?.map_at_5)],
+        ['MRR', m => pctScore(m.quality?.mrr)],
+        ['nDCG@5', m => pctScore(m.quality?.ndcg_at_5)],
+        ['MAP@5', m => pctScore(m.quality?.map_at_5)],
         ['Evidence Recall@5', m => pct(m.quality?.evidence_recall_at_5)],
         ['Evidence Hit@5', m => pct(m.quality?.evidence_hit_at_5)],
-        ['Evidence MRR', m => num(m.quality?.evidence_mrr)],
-        ['Evidence nDCG@5', m => num(m.quality?.evidence_ndcg_at_5)],
-        ['Evidence Token-F1@5', m => num(m.quality?.evidence_token_f1_at_5)],
+        ['Evidence MRR', m => pctScore(m.quality?.evidence_mrr)],
+        ['Evidence nDCG@5', m => pctScore(m.quality?.evidence_ndcg_at_5)],
+        ['Evidence Token-F1@5', m => pctScore(m.quality?.evidence_token_f1_at_5)],
         ['Text Recall', m => pct(m.quality?.text_recall)],
-        ['Retrieval Semantic Similarity', m => num(m.quality?.retrieval_semantic_similarity)],
-        ['Answer Semantic Similarity', m => num(m.quality?.answer_semantic_similarity)],
-        ['Answer Token-F1', m => num(m.quality?.answer_token_f1)],
-        ['Answer ROUGE-L', m => num(m.quality?.answer_rougeL)],
+        ['Retrieval Semantic Similarity', m => pctScore(m.quality?.retrieval_semantic_similarity)],
+        ['Answer Semantic Similarity', m => pctScore(m.quality?.answer_semantic_similarity)],
+        ['Answer Token-F1', m => pctScore(m.quality?.answer_token_f1)],
+        ['Answer ROUGE-L', m => pctScore(m.quality?.answer_rougeL)],
         ['Answer Exact Match', m => pct(m.quality?.answer_exact_match)],
         ['Avg Latency', m => `${Number(m.performance?.avg_latency_ms || 0).toFixed(0)} ms`],
         ['Avg VRAM', m => `${num(m.performance?.avg_vram_gb, 2)} GB`],

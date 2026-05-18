@@ -95,29 +95,113 @@ from pathlib import Path
 from huggingface_hub import snapshot_download
 
 MODELS = [
-    "Qwen/Qwen2.5-7B-Instruct-AWQ",
-    "google/gemma-4-E2B-it",
+    {
+        "repo_id": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+        "required": True,
+    },
+    {
+        "repo_id": "google/gemma-4-E2B-it",
+        "required": False,
+        "note": (
+            "Experimental unquantized Gemma 4 E2B-it preset. It is optional so Qwen "
+            "remains available if this multimodal checkpoint fails to download or "
+            "fit on the local GPU."
+        ),
+    },
 ]
 
 cache_dir = Path("models")
 cache_dir.mkdir(parents=True, exist_ok=True)
 
-for model_name in MODELS:
-    model_cache = cache_dir / f"models--{model_name.replace('/', '--')}"
+WEIGHT_SUFFIXES = {
+    ".safetensors",
+    ".bin",
+    ".pt",
+    ".pth",
+    ".gguf",
+}
+
+
+def latest_snapshot(model_cache: Path) -> Path | None:
     snapshots_dir = model_cache / "snapshots"
-    if snapshots_dir.exists() and any(snapshots_dir.iterdir()):
+    if not snapshots_dir.exists():
+        return None
+    snapshots = [p for p in snapshots_dir.iterdir() if p.is_dir()]
+    if not snapshots:
+        return None
+    return max(snapshots, key=lambda p: p.stat().st_mtime)
+
+
+def has_usable_checkpoint(snapshot_path: Path) -> tuple[bool, str]:
+    if snapshot_path is None:
+        return False, "no snapshot directory"
+
+    has_config = any(
+        (snapshot_path / name).exists()
+        for name in ("config.json", "params.json")
+    )
+    has_weights = any(
+        path.is_file() and path.suffix in WEIGHT_SUFFIXES
+        for path in snapshot_path.rglob("*")
+    )
+
+    if not has_config and not has_weights:
+        return False, "missing config.json/params.json and model weights"
+    if not has_config:
+        return False, "missing config.json/params.json"
+    if not has_weights:
+        return False, "missing model weights"
+    return True, "ok"
+
+
+for model in MODELS:
+    model_name = model["repo_id"]
+    required = model["required"]
+    note = model.get("note")
+    model_cache = cache_dir / f"models--{model_name.replace('/', '--')}"
+    snapshot_path = latest_snapshot(model_cache)
+    is_valid, reason = has_usable_checkpoint(snapshot_path)
+
+    if is_valid:
         print(f"   Model already cached: {model_name}")
         print(f"      {model_cache}")
         continue
 
     print(f"   Downloading model: {model_name}")
-    snapshot_download(
-        repo_id=model_name,
-        cache_dir=str(cache_dir),
-        local_dir=None,
-        resume_download=True,
+    if snapshot_path is not None:
+        print(f"      Existing cache is incomplete ({reason}); attempting to refresh it.")
+    if note:
+        print(f"      Note: {note}")
+
+    try:
+        downloaded_path = Path(snapshot_download(
+            repo_id=model_name,
+            cache_dir=str(cache_dir),
+            local_dir=None,
+            resume_download=True,
+        ))
+    except Exception as exc:
+        if required:
+            raise
+        print(f"   ⚠️ Optional model download failed: {model_name}")
+        print(f"      {exc}")
+        continue
+
+    is_valid, reason = has_usable_checkpoint(downloaded_path)
+    if is_valid:
+        print(f"   Model downloaded successfully: {model_name}")
+        continue
+
+    message = (
+        f"Downloaded snapshot is not a usable vLLM checkpoint: {model_name}\n"
+        f"      Snapshot: {downloaded_path}\n"
+        f"      Reason: {reason}"
     )
-    print(f"   Model downloaded successfully: {model_name}")
+    if required:
+        raise RuntimeError(message)
+    print(f"   ⚠️ {message}")
+    print("      This is an upstream repository content issue, not a local install failure.")
+    print("      Keeping installation going so Qwen presets remain available.")
 PY
 
 # 10. Checking the installs

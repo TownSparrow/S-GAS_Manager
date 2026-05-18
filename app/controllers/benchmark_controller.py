@@ -37,6 +37,13 @@ class BenchmarkController:
             logger.error(f"Failed to list scenarios: {e}")
             return {"status": "error", "message": str(e), "scenarios": []}
 
+    async def get_progress(self, scenario_name: str):
+        try:
+            return self._benchmark_runner.get_progress(scenario_name)
+        except Exception as e:
+            logger.error(f"Failed to get benchmark progress: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     async def run_benchmark(self, scenario_name: str, session_id: Optional[str] = None,
                             fresh_server: bool = False):
         try:
@@ -48,7 +55,7 @@ class BenchmarkController:
                 fresh_server=fresh_server,
             )
             return {
-                "status": "success",
+                "status": result.get("status", "success"),
                 "scenario": result['scenario'],
                 "modes": {
                     mode: {
@@ -100,7 +107,7 @@ class BenchmarkController:
                 fresh_server=fresh_server,
             )
             return {
-                "status": "success",
+                "status": result.get("status", "success"),
                 "scenario": result['scenario'],
                 "mode": result['mode'],
                 "label": result.get('label', result['mode']),

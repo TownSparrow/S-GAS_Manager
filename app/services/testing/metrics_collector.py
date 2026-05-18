@@ -11,6 +11,10 @@ class MetricsCollector:
         self.metrics_history = []
         self.start_time = None
         self.coverage_history = []
+
+    @staticmethod
+    def _as_percent(value: float) -> float:
+        return round(float(value or 0) * 100, 2)
     
     def start_session(self):
         """ Starting the testing session """
@@ -23,6 +27,8 @@ class MetricsCollector:
         metric_entry = {
             # Base metrics
             'iteration': len(self.metrics_history) + 1,
+            'status': turn_data.get('status', 'ok'),
+            'error': turn_data.get('error', ''),
             'query': turn_data.get('query', ''),
             'response': turn_data.get('response', ''),
             'latency_ms': round(turn_data.get('latency_ms', 0), 2),
@@ -32,6 +38,7 @@ class MetricsCollector:
             'latency_rerank_ms': round(turn_data.get('latency_rerank_ms', 0), 2),
             'latency_swap_ms': round(turn_data.get('latency_swap_ms', 0), 2),
             'latency_inference_ms': round(turn_data.get('latency_inference_ms', 0), 2),
+            'latency_observability_ms': round(turn_data.get('latency_observability_ms', 0), 2),
 
             # VRAM metrics
             'vram_allocated_gb': round(turn_data.get('vram_allocated_gb', 0), 4),
@@ -113,7 +120,38 @@ class MetricsCollector:
 
             'timestamp': time.time(),
         }
-        
+        percent_fields = [
+            'coverage_ratio',
+            'retrieval_recall_at_5',
+            'retrieval_precision_at_5',
+            'retrieval_f1_at_5',
+            'retrieval_hit_at_5',
+            'retrieval_mrr',
+            'retrieval_ndcg_at_5',
+            'retrieval_map_at_5',
+            'evidence_recall_at_5',
+            'evidence_hit_at_5',
+            'evidence_mrr',
+            'evidence_ndcg_at_5',
+            'evidence_map_at_5',
+            'evidence_token_f1_at_5',
+            'cache_hit_rate',
+            'vllm_kv_cache_usage_before',
+            'vllm_kv_cache_usage_after',
+            'vllm_kv_cache_usage_delta',
+            'vllm_prefix_cache_hit_rate_delta',
+            'recall_at_k',
+            'precision',
+            'answer_semantic_similarity',
+            'answer_token_f1',
+            'answer_exact_match',
+            'answer_rouge1',
+            'answer_rouge2',
+            'answer_rougeL',
+        ]
+        for field in percent_fields:
+            metric_entry[f'{field}_pct'] = self._as_percent(metric_entry.get(field, 0))
+
         self.metrics_history.append(metric_entry)
         self.coverage_history.append(metric_entry['coverage_ratio'])
     
@@ -121,8 +159,36 @@ class MetricsCollector:
         """ Calculating summary metrics """
         if not self.metrics_history:
             return {}
-        
-        metrics = self.metrics_history
+
+        all_metrics = self.metrics_history
+        metrics = [m for m in all_metrics if m.get('status', 'ok') == 'ok']
+        failed_metrics = [m for m in all_metrics if m.get('status') == 'failed']
+
+        if not metrics:
+            first_error = failed_metrics[0].get('error', '') if failed_metrics else ''
+            return {
+                'status': 'failed',
+                'attempted_turns': len(all_metrics),
+                'total_turns': 0,
+                'failed_turns': len(failed_metrics),
+                'first_error': first_error,
+                'session_duration_s': round(time.time() - self.start_time, 2) if self.start_time else 0,
+                'avg_latency_ms': 0,
+                'avg_latency_excl_first_ms': 0,
+                'avg_latency_inference_ms': 0,
+                'avg_latency_observability_ms': 0,
+                'max_latency_ms': 0,
+                'min_latency_ms': 0,
+                'avg_vram_gb': 0,
+                'peak_vram_gb': 0,
+                'min_vram_gb': 0,
+                'avg_active_chunks': 0,
+                'final_coverage': 0,
+                'coverage_progression': [],
+                'avg_cache_hit_rate': 0,
+                'final_cache_hit_rate': 0,
+                'total_swap_operations': 0,
+            }
         
         # VRAM
         vrms_allocated = [m['vram_allocated_gb'] for m in metrics]
@@ -130,6 +196,8 @@ class MetricsCollector:
         
         # Latency
         latencies = [m['latency_ms'] for m in metrics]
+        inference_latencies = [m.get('latency_inference_ms', 0) for m in metrics]
+        observability_latencies = [m.get('latency_observability_ms', 0) for m in metrics]
         
         # Chunks
         active_chunks = [m['active_chunks'] for m in metrics]
@@ -168,6 +236,14 @@ class MetricsCollector:
         avg_latency = sum(latencies) / len(latencies) if latencies else 0
         max_latency = max(latencies) if latencies else 0
         min_latency = min(latencies) if latencies else 0
+        avg_inference_latency = (
+            sum(inference_latencies) / len(inference_latencies)
+            if inference_latencies else 0
+        )
+        avg_observability_latency = (
+            sum(observability_latencies) / len(observability_latencies)
+            if observability_latencies else 0
+        )
         # Exclude the first turn (model warmup + graph init inflate it significantly)
         latencies_excl_first = latencies[1:] if len(latencies) > 1 else latencies
         avg_latency_excl_first = sum(latencies_excl_first) / len(latencies_excl_first) if latencies_excl_first else 0
@@ -196,7 +272,11 @@ class MetricsCollector:
         total_token_throughput = [m.get('vllm_total_tokens_per_second', 0) for m in metrics if m.get('vllm_total_tokens_per_second', 0) > 0]
         preemptions = [m.get('vllm_preemptions_delta', 0) for m in metrics]
 
-        return {
+        summary = {
+            'status': 'partial_failed' if failed_metrics else 'completed',
+            'attempted_turns': len(all_metrics),
+            'failed_turns': len(failed_metrics),
+            'first_error': failed_metrics[0].get('error', '') if failed_metrics else '',
             # Performance
             'total_turns': len(metrics),
             'session_duration_s': round(time.time() - self.start_time, 2),
@@ -209,13 +289,15 @@ class MetricsCollector:
             # Latency
             'avg_latency_ms': round(avg_latency, 2),
             'avg_latency_excl_first_ms': round(avg_latency_excl_first, 2),
+            'avg_latency_inference_ms': round(avg_inference_latency, 2),
+            'avg_latency_observability_ms': round(avg_observability_latency, 2),
             'max_latency_ms': round(max_latency, 2),
             'min_latency_ms': round(min_latency, 2),
             
             # Chunks
             'avg_active_chunks': round(avg_chunks, 2),
             'final_coverage': coverages[-1] if coverages else 0,
-            'coverage_progression': self.coverage_history,
+            'coverage_progression': coverages,
 
             # Retrieval quality
             'avg_retrieval_recall_at_5': round(sum(retrieval_recall_at_5) / len(retrieval_recall_at_5), 4) if retrieval_recall_at_5 else 0,
@@ -278,6 +360,32 @@ class MetricsCollector:
                 'coverage_efficiency': round((coverages[-1] / 0.8) * 100, 1) if coverages and coverages[-1] > 0 else 0
             }
         }
+        summary.update({
+            'final_coverage_pct': self._as_percent(summary.get('final_coverage', 0)),
+            'avg_retrieval_recall_at_5_pct': self._as_percent(summary.get('avg_retrieval_recall_at_5', 0)),
+            'avg_retrieval_precision_at_5_pct': self._as_percent(summary.get('avg_retrieval_precision_at_5', 0)),
+            'avg_retrieval_f1_at_5_pct': self._as_percent(summary.get('avg_retrieval_f1_at_5', 0)),
+            'avg_retrieval_hit_at_5_pct': self._as_percent(summary.get('avg_retrieval_hit_at_5', 0)),
+            'avg_retrieval_mrr_pct': self._as_percent(summary.get('avg_retrieval_mrr', 0)),
+            'avg_retrieval_ndcg_at_5_pct': self._as_percent(summary.get('avg_retrieval_ndcg_at_5', 0)),
+            'avg_retrieval_map_at_5_pct': self._as_percent(summary.get('avg_retrieval_map_at_5', 0)),
+            'avg_evidence_recall_at_5_pct': self._as_percent(summary.get('avg_evidence_recall_at_5', 0)),
+            'avg_evidence_hit_at_5_pct': self._as_percent(summary.get('avg_evidence_hit_at_5', 0)),
+            'avg_evidence_mrr_pct': self._as_percent(summary.get('avg_evidence_mrr', 0)),
+            'avg_evidence_ndcg_at_5_pct': self._as_percent(summary.get('avg_evidence_ndcg_at_5', 0)),
+            'avg_evidence_map_at_5_pct': self._as_percent(summary.get('avg_evidence_map_at_5', 0)),
+            'avg_evidence_token_f1_at_5_pct': self._as_percent(summary.get('avg_evidence_token_f1_at_5', 0)),
+            'avg_answer_semantic_similarity_pct': self._as_percent(summary.get('avg_answer_semantic_similarity', 0)),
+            'avg_answer_token_f1_pct': self._as_percent(summary.get('avg_answer_token_f1', 0)),
+            'avg_answer_exact_match_pct': self._as_percent(summary.get('avg_answer_exact_match', 0)),
+            'avg_answer_rougeL_pct': self._as_percent(summary.get('avg_answer_rougeL', 0)),
+            'avg_cache_hit_rate_pct': self._as_percent(summary.get('avg_cache_hit_rate', 0)),
+            'final_cache_hit_rate_pct': self._as_percent(summary.get('final_cache_hit_rate', 0)),
+            'avg_vllm_kv_cache_usage_after_pct': self._as_percent(summary.get('avg_vllm_kv_cache_usage_after', 0)),
+            'peak_vllm_kv_cache_usage_after_pct': self._as_percent(summary.get('peak_vllm_kv_cache_usage_after', 0)),
+            'avg_vllm_prefix_cache_hit_rate_delta_pct': self._as_percent(summary.get('avg_vllm_prefix_cache_hit_rate_delta', 0)),
+        })
+        return summary
     
     def export_to_csv(self, filepath: str):
         """ Exporting as CSV """
@@ -287,7 +395,12 @@ class MetricsCollector:
             return
         
         with open(filepath, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=self.metrics_history[0].keys())
+            fieldnames = []
+            for entry in self.metrics_history:
+                for key in entry.keys():
+                    if key not in fieldnames:
+                        fieldnames.append(key)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(self.metrics_history)
     

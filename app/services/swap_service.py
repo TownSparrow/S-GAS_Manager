@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class SwapService(ISwapManager):
-    def __init__(self, threshold: float = 0.3, prefetch_count: int = 5, memory_check_interval_ms: int = 50, max_gpu_memory_tokens: Optional[int] = None, device: str = "cuda:0" if torch.cuda.is_available() else "cpu", force_offload_on_iteration: int = -1, retain_top_centrality_pct: float = 0.15, eviction_ram_threshold_gb: float = 12.0):
+    def __init__(self, threshold: float = 0.3, prefetch_count: int = 5, memory_check_interval_ms: int = 50, max_gpu_memory_tokens: Optional[int] = None, device: str = "cuda:0" if torch.cuda.is_available() else "cpu", force_offload_on_iteration: int = -1, retain_top_centrality_pct: float = 0.15, eviction_ram_threshold_gb: float = 12.0, proactive_offload: bool = False, gpu_pressure_free_ratio: float = 0.15, enabled: bool = False):
+        self.enabled = enabled
         self._device = torch.device(device) if isinstance(device, str) else device
         self._threshold = threshold
         self._prefetch_count = prefetch_count
@@ -42,6 +43,8 @@ class SwapService(ISwapManager):
         self._force_offload_on_iteration = force_offload_on_iteration
         self._retain_top_centrality_pct = retain_top_centrality_pct
         self._eviction_ram_threshold_gb = eviction_ram_threshold_gb
+        self._proactive_offload = proactive_offload
+        self._gpu_pressure_free_ratio = gpu_pressure_free_ratio
         self._protected_chunk_ids: set = set()  # high-centrality chunks to retain
         self._eviction_candidates: set = set()  # marked for deletion when RAM is tight
 
@@ -113,6 +116,8 @@ class SwapService(ISwapManager):
             return False
 
     def initialize_chunks(self, chunks):
+        if not self.enabled:
+            return
         is_cuda = "cuda" in str(self._device)
         for chunk in chunks:
             cid = chunk.get('id', f'chunk_{len(self.cpu_chunks)}')
@@ -139,6 +144,8 @@ class SwapService(ISwapManager):
         """
         Check how many requested chunks are already in GPU (true cache hit).
         """
+        if not self.enabled:
+            return {'hits': 0, 'misses': 0, 'hit_rate': 0.0}
         hits = 0
         misses = 0
         for cid in requested_chunk_ids:
@@ -157,6 +164,8 @@ class SwapService(ISwapManager):
         }
 
     def update_prefetch_buffer(self, chunks):
+        if not self.enabled:
+            return
         self._prefetch_buffer.clear()
         for c in chunks[:self._prefetch_count]:
             cid = c.get('id')
@@ -174,15 +183,13 @@ class SwapService(ISwapManager):
     def decide_swap_action(self, context_chunks, current_context_tokens, iteration=0):
         """Determine what swap action to take for the current iteration.
 
-        The default strategy is *proactive*: GPU/hot chunks that are no longer part
-        of the current context are offloaded to RAM/cold on every turn.  This ensures
-        the S-GAS adaptive-swapping behaviour is always active (not just under memory
-        pressure), making the algorithm's GPU ↔ RAM cycle visible in benchmarks
-        from the very first iteration.
-
-        On CPU-only systems, swapping is simulated using hot (gpu_chunks) vs cold
-        (cpu_chunks) dictionaries so the algorithm remains active and countable.
+        The default strategy is pressure-aware: keep hot chunks in place while GPU
+        memory is healthy, and offload outdated chunks only when memory pressure is
+        visible.  Set proactive_offload=true in config to force the old benchmark
+        behavior where non-current chunks are offloaded every turn.
         """
+        if not self.enabled:
+            return {'action': 'disabled', 'chunk_ids': []}
         is_cuda = "cuda" in str(self._device)
         current_ids = {c.get('id') for c in context_chunks if c.get('id')}
 
@@ -197,12 +204,11 @@ class SwapService(ISwapManager):
         outdated = set(self.gpu_chunks.keys()) - current_ids
         # Protect high-centrality chunks — keep them in hot storage
         evictable = outdated - self._protected_chunk_ids
-        # Mark evicted chunks as deletion candidates
-        self._eviction_candidates.update(evictable)
-        if evictable:
-            return {'action': 'offload', 'chunk_ids': list(evictable)[:SWAP_LRU_OFFLOAD_COUNT + 2]}
-        # If only protected chunks remain, still offload them (they stay in cold/cpu)
-        if outdated:
+        if outdated and (self._proactive_offload or self._is_gpu_under_pressure(current_context_tokens)):
+            # Mark evicted chunks as deletion candidates.
+            self._eviction_candidates.update(evictable)
+            if evictable:
+                return {'action': 'offload', 'chunk_ids': list(evictable)[:SWAP_LRU_OFFLOAD_COUNT + 2]}
             return {'action': 'offload', 'chunk_ids': list(outdated)[:SWAP_LRU_OFFLOAD_COUNT + 2]}
 
         # Load missing current-context chunks into GPU/hot storage.
@@ -231,7 +237,21 @@ class SwapService(ISwapManager):
 
         return {'action': 'none', 'chunk_ids': []}
 
+    def _is_gpu_under_pressure(self, current_context_tokens: int) -> bool:
+        if "cuda" not in str(self._device):
+            return self._proactive_offload
+        try:
+            free_bytes, total_bytes = torch.cuda.mem_get_info(self._device)
+            free_ratio = free_bytes / total_bytes if total_bytes else 1.0
+            free_mb = free_bytes / (1024 * 1024)
+            needed_mb = max(1.0, current_context_tokens * 4 / 1024)
+            return free_ratio <= self._gpu_pressure_free_ratio or free_mb <= needed_mb * 2
+        except Exception:
+            return False
+
     def execute_swap_decision(self, decision):
+        if not self.enabled:
+            return
         action = decision.get('action', 'none')
         chunk_ids = decision.get('chunk_ids', [])
         if action == 'load':
@@ -303,6 +323,8 @@ class SwapService(ISwapManager):
 
         Returns the number of chunks actually deleted.
         """
+        if not self.enabled:
+            return 0
         try:
             import psutil
             ram_used_gb = psutil.virtual_memory().used / (1024 ** 3)
@@ -322,6 +344,8 @@ class SwapService(ISwapManager):
         return deleted
 
     def record_compute_time(self, compute_time_ms):
+        if not self.enabled:
+            return
         self._t_comp_history.append(compute_time_ms / 1000.0)
 
     def get_statistics(self):
@@ -336,6 +360,7 @@ class SwapService(ISwapManager):
         total_cache = self._cache_hits_total + self._cache_misses_total
         return {
             **gpu_stats,
+            'enabled': self.enabled,
             'cpu_archive_mb': round(cpu_mb, 2),
             'chunks_in_archive': len(self.cpu_chunks),
             'chunks_in_gpu': len(self.gpu_chunks),

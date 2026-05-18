@@ -1,21 +1,22 @@
 {
   "profile": {
     "name": "google/gemma-4-E2B-it max",
-    "description": "RTX 4070 Ti Super 16GB text-only profile. Still experimental because official Gemma 4 E2B BF16 guidance targets larger VRAM."
+    "description": "Text-only Gemma 4 E2B-it high-usage preset with a 16k context window and unquantized vLLM settings."
   },
   "vllm": {
     "model_name": "google/gemma-4-E2B-it",
-    "gpu_memory_utilization": 0.9,
-    "max_model_len": 8192,
-    "max_num_seqs": 2,
-    "max_num_batched_tokens": 8192,
-    "swap_space": 12,
-    "cpu_offload_gb": 4,
-    "kv_cache_dtype": "fp8",
-    "kv_offloading_size": 2,
+    "gpu_memory_utilization": 0.8,
+    "max_model_len": 16384,
+    "max_num_seqs": 1,
+    "max_num_batched_tokens": 16384,
+    "swap_space": null,
+    "cpu_offload_gb": null,
+    "kv_cache_dtype": null,
+    "kv_offloading_size": null,
     "quantization": "",
     "dtype": "auto",
     "trust_remote_code": true,
+    "enforce_eager": true,
     "language_model_only": true,
     "limit_mm_per_prompt": {
       "image": 0,
@@ -25,14 +26,15 @@
     "api_base": "http://localhost:8000/v1",
     "temperature": 0.7,
     "top_p": 0.9,
-    "max_tokens": 2048
+    "max_tokens": 2048,
+    "request_timeout": 300
   },
   "embeddings": {
     "model": "sentence-transformers/all-MiniLM-L6-v2",
     "similarity_metric": "cosine"
   },
   "rag": {
-    "top_k": 6
+    "top_k": 10
   },
   "chunking": {
     "max_chunk_size": 512,
@@ -57,15 +59,18 @@
   },
   "prompt": {
     "enable_context_limit": true,
-    "max_context_tokens": 5500
+    "max_context_tokens": 13000
   },
   "swap": {
+    "enabled": false,
     "threshold": 0.35,
     "prefetch_count": 6,
     "memory_check_interval": 100,
-    "force_offload_on_iteration": 1,
+    "force_offload_on_iteration": -1,
     "retain_top_centrality_pct": 0.2,
-    "eviction_ram_threshold_gb": 14.0
+    "eviction_ram_threshold_gb": 14.0,
+    "proactive_offload": false,
+    "gpu_pressure_free_ratio": 0.15
   },
   "retrieval": {
     "initial_top_k_multiplier": 4,
@@ -82,5 +87,8 @@
   "api": {
     "host": "0.0.0.0",
     "port": 8080
+  },
+  "benchmark": {
+    "max_tokens": 128
   }
 }

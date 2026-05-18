@@ -65,6 +65,11 @@ class ChatService:
         self._bm25_weight = bm25_weight  # 0 = disabled, >0 = hybrid
         self._rrf_k = rrf_k  # RRF constant (default 60)
         self._enable_sgas_filtering = enable_sgas_filtering
+        self._enable_graph_expansion_filter = enable_sgas_filtering
+        self._enable_cross_encoder_rerank = enable_sgas_filtering
+        self._enable_dynamic_scoring_weights = enable_sgas_filtering
+        self._enable_semantic_anchor = enable_sgas_filtering
+        self._enable_keyword_boost = enable_sgas_filtering
         self._exclude_used_chunks = False  # default; overridden by config
 
     async def process_chat(self, session_id: str, session_data: Dict[str, Any], message: str,
@@ -189,10 +194,11 @@ class ChatService:
             session_data['excluded_chunks'].extend(used_ids)
             self._chunker.mark_chunks_used(session_id, used_ids, iteration)
 
-        # ── STEP 4: Cache check + Swap management ─────────────────────
-        # 4a. Initialize swap state on the first turn so that pre-loaded GPU
-        #     chunks are visible to the cache-hit check below.
-        if not baseline_mode and iteration == 1 and not session_data.get('swap_initialized', False):
+        # ── STEP 4: Optional chunk embedding hot/cold management ───────
+        swap_enabled = getattr(self._swap, "enabled", True)
+        # 4a. Initialize swap state on the first turn only when the optional
+        #     embedding swap experiment is enabled.
+        if swap_enabled and not baseline_mode and iteration == 1 and not session_data.get('swap_initialized', False):
             all_chunks = await self._vector_store.get_all_session_chunks(session_id)
             if all_chunks:
                 self._swap.initialize_chunks(all_chunks)
@@ -200,16 +206,19 @@ class ChatService:
 
         # 4b. Check cache BEFORE the swap so we measure whether the PREVIOUS
         #     turn's predictive prefetch placed these chunks in GPU already.
-        cache_check = self._swap.check_cache_hits(retrieved_chunk_ids)
+        cache_check = (
+            self._swap.check_cache_hits(retrieved_chunk_ids)
+            if swap_enabled else {'hits': 0, 'misses': 0, 'hit_rate': 0.0}
+        )
 
         t_swap = time.time()
-        if baseline_mode:
+        if baseline_mode or not swap_enabled:
             swap_action = 'disabled'
         else:
             swap_action = await self._manage_swap(session_id, session_data, final_context, iteration)
         step_timings['swap_ms'] = round((time.time() - t_swap) * 1000, 2)
         # Soft eviction: delete marked candidates when RAM exceeds threshold
-        if not baseline_mode:
+        if swap_enabled and not baseline_mode:
             self._swap.evict_candidates_if_needed()
         vram_per_step['after_swap'] = _get_vram_gb()
 
@@ -226,8 +235,11 @@ class ChatService:
                 n_archived_chunks_this_iter=n_archived_chunks_this_iter,
             )
 
-        t_inference = time.time()
+        t_observability = time.time()
         vllm_metrics_before = await self._safe_get_vllm_metrics()
+        observability_time = time.time() - t_observability
+
+        t_inference = time.time()
         gpu_samples, stop_gpu_sampling = [], asyncio.Event()
         gpu_sampler = asyncio.create_task(
             self._sample_gpu_during_inference(gpu_samples, stop_gpu_sampling)
@@ -236,12 +248,16 @@ class ChatService:
             llm_response = await self._vllm.chat(prompt, {
                 "temperature": temperature, "top_p": top_p, "max_tokens": max_tokens,
             })
+            inference_time = time.time() - t_inference
         finally:
             stop_gpu_sampling.set()
             await gpu_sampler
-        vllm_metrics_after = await self._safe_get_vllm_metrics()
-        inference_time = time.time() - t_inference
         step_timings['inference_ms'] = round(inference_time * 1000, 2)
+
+        t_observability = time.time()
+        vllm_metrics_after = await self._safe_get_vllm_metrics()
+        observability_time += time.time() - t_observability
+        step_timings['observability_ms'] = round(observability_time * 1000, 2)
         self._swap.record_compute_time(inference_time * 1000)
 
         if self._kv_monitor:
@@ -310,6 +326,7 @@ class ChatService:
                     'rerank_ms': step_timings.get('rerank_ms', 0),
                     'swap_ms': step_timings.get('swap_ms', 0),
                     'inference_ms': step_timings.get('inference_ms', 0),
+                    'observability_ms': step_timings.get('observability_ms', 0),
                 },
                 'inference_time_sec': inference_time,
                 'context_tokens': sum(
@@ -457,7 +474,7 @@ class ChatService:
             chunk_embeddings = self._get_safe_embeddings(context_chunks)
             self._graph.update_graph(new_chunks=context_chunks, new_embeddings=chunk_embeddings)
 
-            # Graph-neighbor expansion with semantic quality gate
+            # Graph-neighbor expansion with optional semantic quality gate.
             try:
                 semantic_ids = {c.get('id') for c in context_chunks if c.get('id')}
                 graph_neighbors = self._graph.get_neighboring_chunks_data(
@@ -467,7 +484,7 @@ class ChatService:
                     c for c in graph_neighbors
                     if c.get('id') not in semantic_ids and c.get('id') not in excluded_set
                 ]
-                if new_neighbors and query_vec is not None:
+                if new_neighbors and query_vec is not None and self._enable_graph_expansion_filter:
                     neighbor_embs = self._get_safe_embeddings(new_neighbors)
                     q_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
                     n_norms = neighbor_embs / (np.linalg.norm(neighbor_embs, axis=1, keepdims=True) + 1e-8)
@@ -498,6 +515,14 @@ class ChatService:
                             f"Graph expansion: all {len(new_neighbors)} neighbors below "
                             f"semantic threshold {sim_threshold:.3f}"
                         )
+                elif new_neighbors:
+                    neighbor_embs = self._get_safe_embeddings(new_neighbors)
+                    context_chunks = list(context_chunks) + new_neighbors
+                    chunk_embeddings = np.vstack([chunk_embeddings, neighbor_embs])
+                    logger.debug(
+                        f"Graph expansion: +{len(new_neighbors)} neighbor chunks "
+                        "without semantic filtering"
+                    )
             except Exception as e:
                 logger.debug(f"Graph expansion skipped: {e}")
             # ─────────────────────────────────────────────────────────────────
@@ -533,6 +558,10 @@ class ChatService:
                     min_score=self._min_similarity_score if self._enable_sgas_filtering else 0.0,
                     query_text=message,
                     enable_adaptive_k=self._enable_sgas_filtering,
+                    enable_cross_encoder=self._enable_cross_encoder_rerank,
+                    enable_dynamic_weights=self._enable_dynamic_scoring_weights,
+                    enable_semantic_anchor=self._enable_semantic_anchor,
+                    enable_keyword_boost=self._enable_keyword_boost,
                 ),
                 chunk_embeddings,
                 graph_distances,
@@ -606,7 +635,7 @@ class ChatService:
         self,
         samples: List[Dict[str, Any]],
         stop_event: asyncio.Event,
-        interval_sec: float = 0.2,
+        interval_sec: float = 1.0,
     ) -> None:
         """Sample physical GPU stats while the external vLLM process is generating."""
         first = get_nvidia_smi_stats()

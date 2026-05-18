@@ -22,6 +22,7 @@ SCENARIOS=()
 CONTINUE_ON_ERROR=1
 VLLM_PORT=8000
 FORCE_FREE_PORTS=${S_GAS_BENCH_FORCE_PORTS:-1}
+SKIP_INVALID_MODELS=${S_GAS_BENCH_SKIP_INVALID_MODELS:-1}
 
 usage() {
   cat <<'EOF'
@@ -42,6 +43,9 @@ Options:
 
 Environment:
   S_GAS_BENCH_FORCE_PORTS=0  Same as --no-force-ports.
+  S_GAS_BENCH_SKIP_INVALID_MODELS=0
+                             Fail instead of skipping presets whose local model
+                             cache is incomplete. Default: skip invalid presets.
 EOF
 }
 
@@ -148,8 +152,6 @@ printf 'preset\tscenario\tstatus\tcomparison_json\tdocx_report\tresponse_json\n'
 export HF_HUB_CACHE="$ROOT_DIR/models"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 VLLM_PID=""
 API_PID=""
@@ -233,11 +235,16 @@ wait_for_url() {
   local label="$1"
   local url="$2"
   local timeout_seconds="$3"
+  local pid="${4:-}"
   local start
   start="$(date +%s)"
   while true; do
     if curl -fsS "$url" >/dev/null 2>&1; then
       return 0
+    fi
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      echo "$label process exited before becoming ready: $url"
+      return 1
     fi
     if [ $(( $(date +%s) - start )) -ge "$timeout_seconds" ]; then
       echo "$label did not become ready after ${timeout_seconds}s: $url"
@@ -251,6 +258,120 @@ flag_supported() {
   local help_text="$1"
   local flag="$2"
   grep -q -- "$flag" <<< "$help_text"
+}
+
+is_positive_value() {
+  local value="$1"
+  [ -n "$value" ] && [ "$value" != "null" ] && [ "$value" != "0" ] && [ "$value" != "0.0" ]
+}
+
+latest_snapshot_path() {
+  local model_cache="$1"
+  if [ ! -d "$model_cache/snapshots" ]; then
+    return 1
+  fi
+  find "$model_cache/snapshots" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR == 1 {print $2}'
+}
+
+has_usable_hf_snapshot() {
+  local snapshot_path="$1"
+  if [ -z "$snapshot_path" ] || [ ! -d "$snapshot_path" ]; then
+    return 1
+  fi
+  if ! { [ -e "$snapshot_path/config.json" ] || [ -e "$snapshot_path/params.json" ]; }; then
+    return 1
+  fi
+  find -L "$snapshot_path" -type f \( \
+    -name '*.safetensors' -o \
+    -name '*.bin' -o \
+    -name '*.pt' -o \
+    -name '*.pth' -o \
+    -name '*.gguf' \
+  \) -print -quit | grep -q .
+}
+
+explain_invalid_model_cache() {
+  local model="$1"
+  local model_cache="$2"
+  local snapshot_path="$3"
+  echo "Model cache is present but incomplete for vLLM:"
+  echo "   Model: $model"
+  echo "   Cache: $model_cache"
+  if [ -n "$snapshot_path" ]; then
+    echo "   Snapshot: $snapshot_path"
+  fi
+  echo "   Required: config.json or params.json plus at least one weight file (*.safetensors, *.bin, *.pt, *.pth, *.gguf)."
+}
+
+remove_torch_allocator_expandable_segments() {
+  local current="${PYTORCH_CUDA_ALLOC_CONF:-}"
+  local cleaned=""
+  local part
+
+  if [ -z "$current" ]; then
+    return 0
+  fi
+
+  IFS=',' read -ra parts <<< "$current"
+  for part in "${parts[@]}"; do
+    if [[ "$part" =~ ^[[:space:]]*expandable_segments:[Tt]rue[[:space:]]*$ ]]; then
+      continue
+    fi
+    if [ -n "$cleaned" ]; then
+      cleaned+=","
+    fi
+    cleaned+="$part"
+  done
+
+  if [ -n "$cleaned" ]; then
+    export PYTORCH_CUDA_ALLOC_CONF="$cleaned"
+  else
+    unset PYTORCH_CUDA_ALLOC_CONF
+  fi
+}
+
+configure_torch_allocator_for_kv_offloading() {
+  local kv_offloading_size="$1"
+
+  if is_positive_value "$kv_offloading_size"; then
+    remove_torch_allocator_expandable_segments
+    log "KV offloading note: disabled PyTorch expandable_segments allocator because vLLM KV offload is incompatible with it."
+  else
+    export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  fi
+}
+
+collect_vllm_source_flags() {
+  python - <<'PY'
+from pathlib import Path
+import importlib.util
+import re
+
+spec = importlib.util.find_spec("vllm")
+if not spec or not spec.origin:
+    raise SystemExit(0)
+
+root = Path(spec.origin).parent
+candidate_files = [
+    root / "engine" / "arg_utils.py",
+    root / "entrypoints" / "openai" / "cli_args.py",
+    root / "entrypoints" / "cli" / "serve.py",
+]
+
+flags = set()
+for path in candidate_files:
+    if not path.exists():
+        continue
+    flags.update(
+        re.findall(
+            r'["\'](--[A-Za-z0-9][A-Za-z0-9-]*)["\']',
+            path.read_text(encoding="utf-8", errors="ignore"),
+        )
+    )
+
+for flag in sorted(flags):
+    print(flag)
+PY
 }
 
 append_value_arg() {
@@ -299,10 +420,15 @@ build_vllm_command() {
   local config="$1"
   local vllm_help="$2"
 
-  local model gpu_mem max_len max_seqs max_batched_tokens swap_space cpu_offload_gb
+  local model served_model_name tokenizer hf_config_path load_format
+  local gpu_mem max_len max_seqs max_batched_tokens swap_space cpu_offload_gb
   local kv_cache_dtype kv_offloading_size quant dtype limit_mm_per_prompt prefix_caching
 
   model="$(jq_value "$config" '.vllm.model_name')"
+  served_model_name="$(jq_value "$config" '.vllm.served_model_name')"
+  tokenizer="$(jq_value "$config" '.vllm.tokenizer')"
+  hf_config_path="$(jq_value "$config" '.vllm.hf_config_path')"
+  load_format="$(jq_value "$config" '.vllm.load_format')"
   gpu_mem="$(jq_value "$config" '.vllm.gpu_memory_utilization')"
   max_len="$(jq_value "$config" '.vllm.max_model_len')"
   max_seqs="$(jq_value "$config" '.vllm.max_num_seqs')"
@@ -313,8 +439,11 @@ build_vllm_command() {
   kv_offloading_size="$(jq_value "$config" '.vllm.kv_offloading_size')"
   quant="$(jq_value "$config" '.vllm.quantization')"
   dtype="$(jq_value "$config" '.vllm.dtype')"
+  enforce_eager="$(jq_value "$config" '.vllm.enforce_eager')"
   limit_mm_per_prompt="$(jq_json "$config" '.vllm.limit_mm_per_prompt')"
   prefix_caching="$(jq_value "$config" '.vllm.enable_prefix_caching')"
+
+  configure_torch_allocator_for_kv_offloading "$kv_offloading_size"
 
   dtype=${dtype:-"auto"}
   VLLM_CMD=(vllm serve "$model" --host 0.0.0.0 --port "$VLLM_PORT")
@@ -323,14 +452,26 @@ build_vllm_command() {
   append_value_arg "--max-model-len" "$max_len"
   append_value_arg "--max-num-seqs" "$max_seqs"
   append_value_arg "--max-num-batched-tokens" "$max_batched_tokens"
-  append_value_arg "--swap-space" "$swap_space"
-  append_positive_value_arg "--cpu-offload-gb" "$cpu_offload_gb"
+  append_optional_value_arg "$vllm_help" "--served-model-name" "$served_model_name"
+  append_optional_value_arg "$vllm_help" "--tokenizer" "$tokenizer"
+  append_optional_value_arg "$vllm_help" "--hf-config-path" "$hf_config_path"
+  append_optional_value_arg "$vllm_help" "--load-format" "$load_format"
+  append_optional_value_arg "$vllm_help" "--swap-space" "$swap_space"
+  append_optional_positive_value_arg "$vllm_help" "--cpu-offload-gb" "$cpu_offload_gb"
   append_value_arg "--kv-cache-dtype" "$kv_cache_dtype"
   append_optional_positive_value_arg "$vllm_help" "--kv-offloading-size" "$kv_offloading_size"
   append_value_arg "--dtype" "$dtype"
 
   if [ -n "$quant" ] && [ "$quant" != "null" ] && [ "$quant" != "none" ]; then
     VLLM_CMD+=("--quantization" "$quant")
+  fi
+
+  if [ "$enforce_eager" = "true" ]; then
+    if flag_supported "$vllm_help" "--enforce-eager"; then
+      VLLM_CMD+=("--enforce-eager")
+    else
+      log "Warning: installed vLLM does not support --enforce-eager; skipping it."
+    fi
   fi
 
   if [ "$(jq_value "$config" '.vllm.trust_remote_code')" = "true" ]; then
@@ -362,7 +503,7 @@ run_one_preset() {
   local preset_count="$3"
   local config_abs="$ROOT_DIR/$config"
   local config_base model api_host api_port api_bind_host api_base profile_description
-  local model_cache preset_dir vllm_log api_log response_file vllm_help
+  local model_cache snapshot_path preset_dir vllm_log api_log response_file vllm_help
 
   config_base="$(basename "$config" .json)"
   model="$(jq_value "$config" '.vllm.model_name')"
@@ -382,14 +523,32 @@ run_one_preset() {
     log "Preset note: $profile_description"
   fi
 
-  if [[ "$model" == google/gemma-4-E2B-it* ]]; then
-    log "Gemma note: low-VRAM modes are experimental; failures will be recorded clearly."
+  if [[ "$model" == *gemma-4-E2B-it* ]]; then
+    log "Gemma note: this preset uses the original unquantized checkpoint in text-only mode."
   fi
 
   model_cache="models/models--$(echo "$model" | sed 's|/|--|g')"
-  if [ ! -d "$model_cache" ]; then
+  if [ -e "$model" ]; then
+    log "Using local model path: $model"
+  elif [ -d "$model_cache" ]; then
+    snapshot_path="$(latest_snapshot_path "$model_cache" || true)"
+    if ! has_usable_hf_snapshot "$snapshot_path"; then
+      explain_invalid_model_cache "$model" "$model_cache" "$snapshot_path"
+      if [ "$SKIP_INVALID_MODELS" = "1" ]; then
+        log "Skipping preset with incomplete model cache: $config_base"
+        printf '%s\t-\tskipped_invalid_model\t\t\t-\n' "$config_base" >>"$SUMMARY_FILE"
+        return 0
+      fi
+      return 1
+    fi
+  else
     echo "Model is not downloaded locally: $model_cache"
     echo "Run scripts/install_env.sh first, or download $model into ./models."
+    if [ "$SKIP_INVALID_MODELS" = "1" ]; then
+      log "Skipping preset with missing model cache: $config_base"
+      printf '%s\t-\tskipped_missing_model\t\t\t-\n' "$config_base" >>"$SUMMARY_FILE"
+      return 0
+    fi
     return 1
   fi
 
@@ -398,6 +557,10 @@ run_one_preset() {
   free_port "$api_port"
 
   vllm_help="$(vllm serve --help 2>&1 || true)"
+  if ! grep -q -- "usage:" <<< "$vllm_help"; then
+    log "Warning: unable to read 'vllm serve --help'; using installed package metadata for flag checks."
+  fi
+  vllm_help="${vllm_help}"$'\n'"$(collect_vllm_source_flags)"
   build_vllm_command "$config" "$vllm_help"
 
   vllm_log="$preset_dir/vllm.log"
@@ -411,7 +574,7 @@ run_one_preset() {
   "${VLLM_CMD[@]}" >"$vllm_log" 2>&1 &
   VLLM_PID=$!
 
-  if ! wait_for_url "vLLM" "http://127.0.0.1:${VLLM_PORT}/v1/models" 900; then
+  if ! wait_for_url "vLLM" "http://127.0.0.1:${VLLM_PORT}/v1/models" 900 "$VLLM_PID"; then
     log "vLLM failed to become ready for $config_base. See $vllm_log."
     return 1
   fi
