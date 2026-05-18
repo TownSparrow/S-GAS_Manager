@@ -42,6 +42,22 @@ class MetricsCollector:
             'active_chunks': turn_data.get('active_chunks', 0),
             'total_chunks': turn_data.get('total_chunks', 0),
             'coverage_ratio': round(turn_data.get('coverage_ratio', 0), 3),
+            'retrieval_recall_at_5': round(turn_data.get('retrieval_recall_at_5', 0), 4),
+            'retrieval_precision_at_5': round(turn_data.get('retrieval_precision_at_5', 0), 4),
+            'retrieval_f1_at_5': round(turn_data.get('retrieval_f1_at_5', 0), 4),
+            'retrieval_hit_at_5': round(turn_data.get('retrieval_hit_at_5', 0), 4),
+            'retrieval_mrr': round(turn_data.get('retrieval_mrr', 0), 4),
+            'retrieval_ndcg_at_5': round(turn_data.get('retrieval_ndcg_at_5', 0), 4),
+            'retrieval_map_at_5': round(turn_data.get('retrieval_map_at_5', 0), 4),
+            'retrieval_relevant_count': turn_data.get('retrieval_relevant_count', 0),
+            'retrieval_retrieved_count': turn_data.get('retrieval_retrieved_count', 0),
+            'evidence_recall_at_5': round(turn_data.get('evidence_recall_at_5', 0), 4),
+            'evidence_hit_at_5': round(turn_data.get('evidence_hit_at_5', 0), 4),
+            'evidence_mrr': round(turn_data.get('evidence_mrr', 0), 4),
+            'evidence_ndcg_at_5': round(turn_data.get('evidence_ndcg_at_5', 0), 4),
+            'evidence_map_at_5': round(turn_data.get('evidence_map_at_5', 0), 4),
+            'evidence_token_f1_at_5': round(turn_data.get('evidence_token_f1_at_5', 0), 4),
+            'evidence_count': turn_data.get('evidence_count', 0),
 
             # KV-cache / swap
             'cache_hit_rate': round(turn_data.get('cache_hit_rate', 0), 3),
@@ -58,9 +74,42 @@ class MetricsCollector:
             'disk_percent': round(turn_data.get('disk_percent', 0), 1),
             'process_rss_mb': round(turn_data.get('process_rss_mb', 0), 1),
 
+            # vLLM /metrics and physical GPU inference-window metrics
+            'vllm_metrics_available': turn_data.get('vllm_metrics_available', False),
+            'vllm_kv_cache_usage_before': round(turn_data.get('vllm_kv_cache_usage_before', 0), 4),
+            'vllm_kv_cache_usage_after': round(turn_data.get('vllm_kv_cache_usage_after', 0), 4),
+            'vllm_kv_cache_usage_delta': round(turn_data.get('vllm_kv_cache_usage_delta', 0), 4),
+            'vllm_prefix_cache_hit_rate_delta': round(turn_data.get('vllm_prefix_cache_hit_rate_delta', 0), 4),
+            'vllm_prefix_cache_queries_delta': round(turn_data.get('vllm_prefix_cache_queries_delta', 0), 4),
+            'vllm_prefix_cache_hits_delta': round(turn_data.get('vllm_prefix_cache_hits_delta', 0), 4),
+            'vllm_preemptions_delta': round(turn_data.get('vllm_preemptions_delta', 0), 4),
+            'vllm_request_success_delta': round(turn_data.get('vllm_request_success_delta', 0), 4),
+            'vllm_generation_tokens_delta': round(turn_data.get('vllm_generation_tokens_delta', 0), 4),
+            'vllm_prompt_tokens_delta': round(turn_data.get('vllm_prompt_tokens_delta', 0), 4),
+            'vllm_tokens_per_second': round(turn_data.get('vllm_tokens_per_second', 0), 4),
+            'vllm_total_tokens_per_second': round(turn_data.get('vllm_total_tokens_per_second', 0), 4),
+            'vllm_ttft_avg_s': round(turn_data.get('vllm_ttft_avg_s', 0), 4),
+            'vllm_inter_token_latency_avg_s': round(turn_data.get('vllm_inter_token_latency_avg_s', 0), 4),
+            'vllm_prefill_time_avg_s': round(turn_data.get('vllm_prefill_time_avg_s', 0), 4),
+            'vllm_decode_time_avg_s': round(turn_data.get('vllm_decode_time_avg_s', 0), 4),
+            'vllm_queue_time_avg_s': round(turn_data.get('vllm_queue_time_avg_s', 0), 4),
+            'gpu_sample_count': turn_data.get('gpu_sample_count', 0),
+            'gpu_utilization_avg_pct': round(turn_data.get('gpu_utilization_avg_pct', 0), 2),
+            'gpu_utilization_peak_pct': round(turn_data.get('gpu_utilization_peak_pct', 0), 2),
+            'gpu_memory_used_peak_mb': round(turn_data.get('gpu_memory_used_peak_mb', 0), 2),
+            'gpu_memory_used_peak_pct': round(turn_data.get('gpu_memory_used_peak_pct', 0), 2),
+            'gpu_power_avg_w': round(turn_data.get('gpu_power_avg_w', 0), 2),
+            'gpu_power_peak_w': round(turn_data.get('gpu_power_peak_w', 0), 2),
+
             # Semantic metrics
             'recall_at_k': round(turn_data.get('recall_at_k', 0), 3),
             'precision': round(turn_data.get('precision', 0), 3),
+            'answer_semantic_similarity': round(turn_data.get('answer_semantic_similarity', 0), 4),
+            'answer_token_f1': round(turn_data.get('answer_token_f1', 0), 4),
+            'answer_exact_match': round(turn_data.get('answer_exact_match', 0), 4),
+            'answer_rouge1': round(turn_data.get('answer_rouge1', 0), 4),
+            'answer_rouge2': round(turn_data.get('answer_rouge2', 0), 4),
+            'answer_rougeL': round(turn_data.get('answer_rougeL', 0), 4),
 
             'timestamp': time.time(),
         }
@@ -90,6 +139,27 @@ class MetricsCollector:
         
         # Coverage
         coverages = [m['coverage_ratio'] for m in metrics]
+
+        # Retrieval quality
+        retrieval_recall_at_5 = [m.get('retrieval_recall_at_5', 0) for m in metrics]
+        retrieval_precision_at_5 = [m.get('retrieval_precision_at_5', 0) for m in metrics]
+        retrieval_f1_at_5 = [m.get('retrieval_f1_at_5', 0) for m in metrics]
+        retrieval_hit_at_5 = [m.get('retrieval_hit_at_5', 0) for m in metrics]
+        retrieval_mrr = [m.get('retrieval_mrr', 0) for m in metrics]
+        retrieval_ndcg_at_5 = [m.get('retrieval_ndcg_at_5', 0) for m in metrics]
+        retrieval_map_at_5 = [m.get('retrieval_map_at_5', 0) for m in metrics]
+        evidence_recall_at_5 = [m.get('evidence_recall_at_5', 0) for m in metrics if m.get('evidence_count', 0) > 0]
+        evidence_hit_at_5 = [m.get('evidence_hit_at_5', 0) for m in metrics if m.get('evidence_count', 0) > 0]
+        evidence_mrr = [m.get('evidence_mrr', 0) for m in metrics if m.get('evidence_count', 0) > 0]
+        evidence_ndcg_at_5 = [m.get('evidence_ndcg_at_5', 0) for m in metrics if m.get('evidence_count', 0) > 0]
+        evidence_map_at_5 = [m.get('evidence_map_at_5', 0) for m in metrics if m.get('evidence_count', 0) > 0]
+        evidence_token_f1_at_5 = [m.get('evidence_token_f1_at_5', 0) for m in metrics if m.get('evidence_count', 0) > 0]
+
+        # Generation quality
+        answer_semantic_similarity = [m.get('answer_semantic_similarity', 0) for m in metrics]
+        answer_token_f1 = [m.get('answer_token_f1', 0) for m in metrics]
+        answer_exact_match = [m.get('answer_exact_match', 0) for m in metrics]
+        answer_rougeL = [m.get('answer_rougeL', 0) for m in metrics]
         
         avg_vram = sum(vrms_allocated) / len(vrms_allocated) if vrms_allocated else 0
         peak_vram = max(vrms_peak) if vrms_peak else 0
@@ -115,6 +185,17 @@ class MetricsCollector:
         swap_ops = [m.get('swap_operations', 0) for m in metrics]
         total_swap_ops = sum(swap_ops)
 
+        # vLLM/GPU metrics
+        kv_after = [m.get('vllm_kv_cache_usage_after', 0) for m in metrics]
+        kv_delta = [m.get('vllm_kv_cache_usage_delta', 0) for m in metrics]
+        prefix_hit_rates = [m.get('vllm_prefix_cache_hit_rate_delta', 0) for m in metrics]
+        gpu_avg_util = [m.get('gpu_utilization_avg_pct', 0) for m in metrics if m.get('gpu_sample_count', 0) > 0]
+        gpu_peak_util = [m.get('gpu_utilization_peak_pct', 0) for m in metrics if m.get('gpu_sample_count', 0) > 0]
+        gpu_peak_memory = [m.get('gpu_memory_used_peak_mb', 0) for m in metrics if m.get('gpu_sample_count', 0) > 0]
+        token_throughput = [m.get('vllm_tokens_per_second', 0) for m in metrics if m.get('vllm_tokens_per_second', 0) > 0]
+        total_token_throughput = [m.get('vllm_total_tokens_per_second', 0) for m in metrics if m.get('vllm_total_tokens_per_second', 0) > 0]
+        preemptions = [m.get('vllm_preemptions_delta', 0) for m in metrics]
+
         return {
             # Performance
             'total_turns': len(metrics),
@@ -135,11 +216,42 @@ class MetricsCollector:
             'avg_active_chunks': round(avg_chunks, 2),
             'final_coverage': coverages[-1] if coverages else 0,
             'coverage_progression': self.coverage_history,
+
+            # Retrieval quality
+            'avg_retrieval_recall_at_5': round(sum(retrieval_recall_at_5) / len(retrieval_recall_at_5), 4) if retrieval_recall_at_5 else 0,
+            'avg_retrieval_precision_at_5': round(sum(retrieval_precision_at_5) / len(retrieval_precision_at_5), 4) if retrieval_precision_at_5 else 0,
+            'avg_retrieval_f1_at_5': round(sum(retrieval_f1_at_5) / len(retrieval_f1_at_5), 4) if retrieval_f1_at_5 else 0,
+            'avg_retrieval_hit_at_5': round(sum(retrieval_hit_at_5) / len(retrieval_hit_at_5), 4) if retrieval_hit_at_5 else 0,
+            'avg_retrieval_mrr': round(sum(retrieval_mrr) / len(retrieval_mrr), 4) if retrieval_mrr else 0,
+            'avg_retrieval_ndcg_at_5': round(sum(retrieval_ndcg_at_5) / len(retrieval_ndcg_at_5), 4) if retrieval_ndcg_at_5 else 0,
+            'avg_retrieval_map_at_5': round(sum(retrieval_map_at_5) / len(retrieval_map_at_5), 4) if retrieval_map_at_5 else 0,
+            'avg_evidence_recall_at_5': round(sum(evidence_recall_at_5) / len(evidence_recall_at_5), 4) if evidence_recall_at_5 else 0,
+            'avg_evidence_hit_at_5': round(sum(evidence_hit_at_5) / len(evidence_hit_at_5), 4) if evidence_hit_at_5 else 0,
+            'avg_evidence_mrr': round(sum(evidence_mrr) / len(evidence_mrr), 4) if evidence_mrr else 0,
+            'avg_evidence_ndcg_at_5': round(sum(evidence_ndcg_at_5) / len(evidence_ndcg_at_5), 4) if evidence_ndcg_at_5 else 0,
+            'avg_evidence_map_at_5': round(sum(evidence_map_at_5) / len(evidence_map_at_5), 4) if evidence_map_at_5 else 0,
+            'avg_evidence_token_f1_at_5': round(sum(evidence_token_f1_at_5) / len(evidence_token_f1_at_5), 4) if evidence_token_f1_at_5 else 0,
+
+            # Generation quality
+            'avg_answer_semantic_similarity': round(sum(answer_semantic_similarity) / len(answer_semantic_similarity), 4) if answer_semantic_similarity else 0,
+            'avg_answer_token_f1': round(sum(answer_token_f1) / len(answer_token_f1), 4) if answer_token_f1 else 0,
+            'avg_answer_exact_match': round(sum(answer_exact_match) / len(answer_exact_match), 4) if answer_exact_match else 0,
+            'avg_answer_rougeL': round(sum(answer_rougeL) / len(answer_rougeL), 4) if answer_rougeL else 0,
             
             # KV-cache / swap
             'avg_cache_hit_rate': round(avg_cache_hit, 2),
             'final_cache_hit_rate': cache_hits[-1] if cache_hits else 0,
             'total_swap_operations': total_swap_ops,
+            'avg_vllm_kv_cache_usage_after': round(sum(kv_after) / len(kv_after), 4) if kv_after else 0,
+            'peak_vllm_kv_cache_usage_after': round(max(kv_after), 4) if kv_after else 0,
+            'avg_vllm_kv_cache_usage_delta': round(sum(kv_delta) / len(kv_delta), 4) if kv_delta else 0,
+            'avg_vllm_prefix_cache_hit_rate_delta': round(sum(prefix_hit_rates) / len(prefix_hit_rates), 4) if prefix_hit_rates else 0,
+            'total_vllm_preemptions': round(sum(preemptions), 4),
+            'avg_vllm_tokens_per_second': round(sum(token_throughput) / len(token_throughput), 4) if token_throughput else 0,
+            'avg_vllm_total_tokens_per_second': round(sum(total_token_throughput) / len(total_token_throughput), 4) if total_token_throughput else 0,
+            'avg_gpu_utilization_pct': round(sum(gpu_avg_util) / len(gpu_avg_util), 2) if gpu_avg_util else 0,
+            'peak_gpu_utilization_pct': round(max(gpu_peak_util), 2) if gpu_peak_util else 0,
+            'peak_gpu_memory_used_mb': round(max(gpu_peak_memory), 2) if gpu_peak_memory else 0,
 
             # Graph
             'avg_graph_nodes': round(avg_graph_nodes, 1),

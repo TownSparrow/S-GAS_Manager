@@ -11,6 +11,7 @@ class Turn:
     ground_truth: List[str]  # Ground truth chunk references for retrieval evaluation
     ground_truth_answer: str = ""  # Expected answer for generation evaluation (BERTScore)
     ground_truth_text: str = ""   # Distinctive key phrase that must appear in a retrieved chunk
+    ground_truth_texts: Optional[List[str]] = None  # Chunk-ID-independent evidence snippets
     expected_entities: Optional[List[str]] = None
 
 
@@ -53,6 +54,7 @@ class ScenarioLoader:
                 ground_truth=turn.get('ground_truth_chunks') or turn.get('ground_truth', []),
                 ground_truth_answer=turn.get('ground_truth_answer', ''),
                 ground_truth_text=turn.get('ground_truth_text', ''),
+                ground_truth_texts=turn.get('ground_truth_texts'),
                 expected_entities=turn.get('expected_entities'),
             )
             for turn in data['turns']

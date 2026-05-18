@@ -320,7 +320,18 @@ a.tab.graph-tab:hover {
 .comparison-table .positive { color: #28a745; font-weight: 600; }
 .comparison-table .negative { color: #dc3545; font-weight: 600; }
 
+.table-scroll {
+    overflow-x: auto;
+    margin: 15px 0;
+}
+
 /* Summary cards */
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 20px;
+}
+
 .summary-card {
     background: #f8f9fa;
     border: 1px solid #e9ecef;

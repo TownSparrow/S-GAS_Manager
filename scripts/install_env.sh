@@ -87,20 +87,38 @@ mkdir -p logs
 mkdir -p tests/scenarios
 mkdir -p tests/documents
 
-# 9. Download the LLM model for offline use
+# 9. Download the LLM models for offline use
 echo ""
-echo "9) Downloading the LLM model for offline use..."
-MODEL_NAME=$(python3 -c "import json; print(json.load(open('cfg/system_params.json'))['vllm']['model_name'])")
-echo "   Model: $MODEL_NAME"
-python3 -c "
+echo "9) Downloading the LLM models for offline use..."
+python3 - <<'PY'
+from pathlib import Path
 from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id='${MODEL_NAME}',
-    cache_dir='models',
-    local_dir=None,
-)
-print('   Model downloaded successfully')
-"
+
+MODELS = [
+    "Qwen/Qwen2.5-7B-Instruct-AWQ",
+    "google/gemma-4-E2B-it",
+]
+
+cache_dir = Path("models")
+cache_dir.mkdir(parents=True, exist_ok=True)
+
+for model_name in MODELS:
+    model_cache = cache_dir / f"models--{model_name.replace('/', '--')}"
+    snapshots_dir = model_cache / "snapshots"
+    if snapshots_dir.exists() and any(snapshots_dir.iterdir()):
+        print(f"   Model already cached: {model_name}")
+        print(f"      {model_cache}")
+        continue
+
+    print(f"   Downloading model: {model_name}")
+    snapshot_download(
+        repo_id=model_name,
+        cache_dir=str(cache_dir),
+        local_dir=None,
+        resume_download=True,
+    )
+    print(f"   Model downloaded successfully: {model_name}")
+PY
 
 # 10. Checking the installs
 echo ""
