@@ -1,7 +1,7 @@
 # --- Backend and ML-base ---
 torch>=2.5.1
-vllm>=0.6.0
-transformers>=4.46.0
+vllm>=0.19.0
+transformers>=5.5.0
 accelerate>=0.34.0
 
 # --- Quantization and optimization ---

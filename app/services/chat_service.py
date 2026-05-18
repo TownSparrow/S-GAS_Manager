@@ -1,6 +1,7 @@
 import time
 import json
 import logging
+import asyncio
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
@@ -19,7 +20,12 @@ from app.interfaces.vllm_client import IVLLMClient
 from app.services.bm25_service import BM25Service
 from app.consts.defaults import MAX_CHUNK_TEXT_LEN, EMBEDDING_DIM, METRICS_FILE
 from app.consts.prompts import PROMPT_WITH_CONTEXT, PROMPT_WITHOUT_CONTEXT
-from app.utils.gpu import log_gpu_memory_detailed, get_gpu_memory_stats
+from app.utils.gpu import (
+    log_gpu_memory_detailed,
+    get_gpu_memory_stats,
+    get_nvidia_smi_stats,
+    summarize_nvidia_smi_samples,
+)
 from app.utils.system_resources import get_system_resources
 
 logger = logging.getLogger(__name__)
@@ -221,9 +227,19 @@ class ChatService:
             )
 
         t_inference = time.time()
-        llm_response = await self._vllm.chat(prompt, {
-            "temperature": temperature, "top_p": top_p, "max_tokens": max_tokens,
-        })
+        vllm_metrics_before = await self._safe_get_vllm_metrics()
+        gpu_samples, stop_gpu_sampling = [], asyncio.Event()
+        gpu_sampler = asyncio.create_task(
+            self._sample_gpu_during_inference(gpu_samples, stop_gpu_sampling)
+        )
+        try:
+            llm_response = await self._vllm.chat(prompt, {
+                "temperature": temperature, "top_p": top_p, "max_tokens": max_tokens,
+            })
+        finally:
+            stop_gpu_sampling.set()
+            await gpu_sampler
+        vllm_metrics_after = await self._safe_get_vllm_metrics()
         inference_time = time.time() - t_inference
         step_timings['inference_ms'] = round(inference_time * 1000, 2)
         self._swap.record_compute_time(inference_time * 1000)
@@ -243,6 +259,14 @@ class ChatService:
 
         response_text = llm_response['choices'][0]['message']['content']
         usage = llm_response.get('usage', {})
+        vllm_observability = self._build_vllm_observability(
+            before=vllm_metrics_before,
+            after=vllm_metrics_after,
+            response_metrics=llm_response.get('sgas_observability', {}).get('vllm_metrics', {}),
+            gpu_samples=gpu_samples,
+            inference_time_sec=inference_time,
+            usage=usage,
+        )
 
         # ── Collect statistics ────────────────────────────────────────
         chunking_stats = self._chunker.get_statistics(session_id)
@@ -317,6 +341,8 @@ class ChatService:
                 # LLM
                 'tokens_generated': usage.get('completion_tokens', 0),
                 'tokens_in_prompt': usage.get('prompt_tokens', 0),
+                'total_tokens': usage.get('total_tokens', 0),
+                'vllm_observability': vllm_observability,
 
                 'timestamp': datetime.now(timezone.utc).isoformat(),
             },
@@ -568,6 +594,98 @@ class ChatService:
             return await self._vllm.flush_cache()
         except Exception:
             return False
+
+    async def _safe_get_vllm_metrics(self) -> Dict[str, Any]:
+        try:
+            return await self._vllm.get_runtime_metrics()
+        except Exception as e:
+            logger.debug(f"vLLM runtime metrics unavailable: {e}")
+            return {"available": False, "error": str(e)}
+
+    async def _sample_gpu_during_inference(
+        self,
+        samples: List[Dict[str, Any]],
+        stop_event: asyncio.Event,
+        interval_sec: float = 0.2,
+    ) -> None:
+        """Sample physical GPU stats while the external vLLM process is generating."""
+        first = get_nvidia_smi_stats()
+        if first:
+            samples.append(first)
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_sec)
+            except asyncio.TimeoutError:
+                sample = get_nvidia_smi_stats()
+                if sample:
+                    samples.append(sample)
+        last = get_nvidia_smi_stats()
+        if last:
+            samples.append(last)
+
+    @staticmethod
+    def _metric_delta(after: Dict[str, Any], before: Dict[str, Any], key: str) -> float:
+        after_val = after.get(key)
+        before_val = before.get(key)
+        if after_val is None or before_val is None:
+            return 0.0
+        try:
+            return max(0.0, float(after_val) - float(before_val))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _build_vllm_observability(
+        self,
+        before: Dict[str, Any],
+        after: Dict[str, Any],
+        response_metrics: Dict[str, Any],
+        gpu_samples: List[Dict[str, Any]],
+        inference_time_sec: float,
+        usage: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        gpu_summary = summarize_nvidia_smi_samples(gpu_samples)
+        prompt_delta = self._metric_delta(after, before, "prompt_tokens_total")
+        generation_delta = self._metric_delta(after, before, "generation_tokens_total")
+        prefix_query_delta = self._metric_delta(after, before, "prefix_cache_queries_total")
+        prefix_hit_delta = self._metric_delta(after, before, "prefix_cache_hits_total")
+        request_success_delta = self._metric_delta(after, before, "request_success_total")
+        preemption_delta = self._metric_delta(after, before, "num_preemptions_total")
+        prefix_hit_rate_delta = (
+            prefix_hit_delta / prefix_query_delta if prefix_query_delta > 0 else 0.0
+        )
+
+        generated_tokens = usage.get('completion_tokens') or generation_delta
+        prompt_tokens = usage.get('prompt_tokens') or prompt_delta
+        total_tokens = usage.get('total_tokens') or (generated_tokens + prompt_tokens)
+
+        return {
+            "available": bool(after.get("available") or response_metrics.get("available")),
+            "before": before,
+            "after": after,
+            "response_metrics": response_metrics,
+            "gpu_inference_window": gpu_summary,
+            "prompt_tokens_delta": prompt_delta,
+            "generation_tokens_delta": generation_delta,
+            "request_success_delta": request_success_delta,
+            "prefix_cache_queries_delta": prefix_query_delta,
+            "prefix_cache_hits_delta": prefix_hit_delta,
+            "prefix_cache_hit_rate_delta": prefix_hit_rate_delta,
+            "num_preemptions_delta": preemption_delta,
+            "kv_cache_usage_before": before.get("kv_cache_usage_perc"),
+            "kv_cache_usage_after": after.get("kv_cache_usage_perc"),
+            "kv_cache_usage_delta": (
+                float(after.get("kv_cache_usage_perc", 0) or 0)
+                - float(before.get("kv_cache_usage_perc", 0) or 0)
+            ),
+            "tokens_per_second": (
+                round(generated_tokens / inference_time_sec, 4)
+                if inference_time_sec > 0 and generated_tokens else 0.0
+            ),
+            "total_tokens_per_second": (
+                round(total_tokens / inference_time_sec, 4)
+                if inference_time_sec > 0 and total_tokens else 0.0
+            ),
+        }
 
     def get_graph_snapshot(self) -> Dict[str, Any]:
         """Export of current graph state for visualization / archival."""

@@ -204,6 +204,10 @@ def create_app(settings: Settings) -> FastAPI:
     async def get_benchmark_results(scenario_name: str):
         return await benchmark_ctrl.get_benchmark_results(scenario_name)
 
+    @app.get("/api/benchmark/download/{filename}")
+    async def download_benchmark_file(filename: str):
+        return await benchmark_ctrl.download_result_file(filename)
+
     @app.get("/graph")
     async def graph_visualization_ui():
         return await benchmark_ctrl.graph_ui()

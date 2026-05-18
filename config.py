@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -10,9 +11,13 @@ class Settings:
 
     def __init__(self, config_path=None):
         if config_path is None:
-            current_file = Path(__file__)
-            project_root = current_file.parent
-            self.config_path = project_root / "cfg" / "system_params.json"
+            env_config_path = os.getenv("S_GAS_CONFIG_PATH")
+            if env_config_path:
+                self.config_path = Path(env_config_path)
+            else:
+                current_file = Path(__file__)
+                project_root = current_file.parent
+                self.config_path = project_root / "cfg" / "system_params.json"
         else:
             self.config_path = Path(config_path)
         self._data = self._load_config()
