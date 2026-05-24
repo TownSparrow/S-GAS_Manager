@@ -2,7 +2,7 @@
 [RU Version of README](https://github.com/TownSparrow/S-GAS_Manager/blob/main/README_ru.md)
 
 ## ⚠️ WARNING! ⚠️
-Current version is `v0.2.0-alpha.1`. Project is in active development! I don't recommend using it in production tasks yet!
+Current version is `v0.2.1-alpha.1`. Project is in active development! I don't recommend using it in production tasks yet!
 
 ## About the project
 This project is a prototype system that applies a hybrid semantic-graph scoring algorithm for Retrieval-Augmented Generation (RAG) with small language models (SLM). The system combines vector search, knowledge graph analysis, and adaptive query classification to deliver high-quality retrieval results on consumer-grade hardware.
@@ -19,8 +19,8 @@ Small language models are limited by a fixed context window, which creates criti
 ### Key components of the algorithm
 The algorithm consists of three main mechanisms:
 1. **Hybrid scoring formula**: s_i(q) = α·cos(e_q, e_i) + β·[1/(1+d_graph(c_i, q))]
-2. **Dynamic weight classification**: adaptive α/β weights based on query type (factual vs. analytical)
-3. **Multi-stage retrieval pipeline**: dense retrieval → graph expansion → cross-encoder reranking → hybrid fusion
+2. **Dynamic weight classification**: adaptive α/β weights based on query type (factual and analytical)
+3. **Multi-stage retrieval pipeline**: semantic retrieval with cos compare + BM25/RRF → graph expansion → cross-encoder reranking → hybrid fusion
 
 ### Core technologies
 | Component         | Technology             |
@@ -59,28 +59,43 @@ chmod +x ./scripts/install_env.sh
 ```
 
 ### System launch
-1. Check the configuration file and adjust runtime parameters in `cfg/system_params.json` if needed.
-2. In the project root directory, open a terminal and run the launch script:
+1. Check the ready configuration files and adjust runtime parameters. You can also setup your custom launch profile in in file `cfg/system_params.json` if needed.
+2. In the project root directory, open a terminal and run the install script to download and install all needed libraries, tools and SLMs:
+```bash
+chmod +x ./scripts/install_env.sh
+./scripts/install_env.sh
+```
+3. To start the system work use the launch script in same or new terminal with command:
 ```bash
 chmod +x ./scripts/start_vllm_server.sh
 ./scripts/start_vllm_server.sh
 ```
-3. Wait for the system to start successfully.
-4. An additional terminal is automatically opened in the project root folder without closing the previous one, and a script is launched to launch the local server API.
-5. After the API is successfully started, open the system page in your browser: **http://localhost:8080**
+4. Select a launch source:
+   - `Qwen/Qwen2.5-7B-Instruct-AWQ` presets
+   - `google/gemma-4-E2B-it` presets
+   - custom `system_params.json` file with your own preset
+5. Select a runtime mode for built-in presets:
+   - `stress`: 4k physical context window, lowest usage preset
+   - `optimum`: 8k physical context window, balanced preset
+   - `max`: 16k physical context window, high usage preset
+6. Wait for the system to start successfully.
+7. An additional terminal is automatically opened in the project root folder without closing the previous one, and a script is launched to launch the local server API.
+8. After the API is successfully started, open the system page in your browser: **http://localhost:8080**
 
 ## How to use the system
 
-### Via web UI
+### Main page - Via web UI
 1. To create a request, use the message input form. After entering your text, click the corresponding button to send it.
-2. RAG mode is automatically enabled when documents are used. A dedicated button is provided for document upload. Successful upload and processing of a document is indicated by a corresponding message in the chat.
+2. Algorithm mode is automatically enabled when documents are used. A dedicated button is provided for document upload. Successful upload and processing of a document is indicated by a corresponding message in the chat.
 3. When the chat page is opened, a session with a unique ID is created. This ID is required to access the statistics page for a specific session.
 
 ### Main endpoints for system inspection
 - `/api/session/{session_id}/info` - information about the current session
 - `/api/session/{session_id}/documents` - information about documents used in the system
 - `/api/sgas-statistics` - overall state of the algorithm and system
-- `/api/benchmark/run/{dataset}` - run benchmark on specified dataset
+- `/benchmark` - benchmark UI, available by manual navigation
+- `/api/benchmark/run/{scenario_name}` - run all benchmark modes on the specified scenario
+- `/api/benchmark/run/{scenario_name}/{mode}` - run a single benchmark mode (`baseline`, `hybrid_rag`, `sgas_no_filtering`, `sgas`)
 
 ### How to inspect and collect system logs
 1. Use the corresponding endpoints to view system usage statistics.
@@ -116,12 +131,17 @@ S-GAS_MANAGER/
 │   ├── loaders/                      # Document loaders (PDF, Text, DOCX)
 │   └── utils/                        # Utilities (GPU, serialization, validation)
 ├── cfg/
-│   └── system_params.json            # System runtime parameters
+│   ├── system_params.json            # Default system runtime parameters
+│   └── *.json                        # Model/runtime presets and custom launch profiles
 ├── static/                           # Web client (HTML, CSS, JS)
 ├── scripts/
 │   ├── install_env.sh                # Automatic dependency installation
-│   └── start_vllm_server.sh          # vLLM server startup
-├── logs/                             # Per-session metrics logging
+│   ├── start_vllm_server.sh          # Interactive vLLM/API startup with presets
+│   └── run_full_benchmark_cycle.sh   # Automated preset/scenario benchmark cycle
+├── logs/
+│   ├── benchmarks/                   # CSV/JSON/DOCX benchmark artifacts
+│   ├── benchmark_batch/              # Batch summaries and preset logs
+│   └── session_metrics.jsonl         # Per-session metrics log
 └── data/                             # Document and embedding storage (created automatically)
 
 ```
@@ -130,7 +150,7 @@ S-GAS_MANAGER/
 
 The project includes a comprehensive benchmarking system for evaluating retrieval quality:
 
-### Metrics
+### Key metrics
 - **Recall@K**: Ability to retrieve relevant chunks in top-K results
 - **Coverage**: Percentage of queries with at least one relevant chunk retrieved
 - **Text Recall**: Exact match quality of retrieved content
@@ -143,8 +163,23 @@ The project includes a comprehensive benchmarking system for evaluating retrieva
 - **Optimal**: Balanced configuration (gpu_memory_utilization: 0.7, max_tokens: 512)
 - **Maximal**: Full resource utilization (gpu_memory_utilization: 0.85, max_tokens: 1024)
 
+### Benchmark launch options
+- Open **http://localhost:8080/benchmark** manually after the API starts to use the benchmark web page.
+- Use `/api/benchmark/run/{scenario_name}` to run all four modes for one scenario.
+- Use `/api/benchmark/run/{scenario_name}/{mode}` to run one mode only. Available modes: `baseline`, `hybrid_rag`, `sgas_no_filtering`, `sgas`.
+- Run the full automatic benchmark cycle from the project root:
+```bash
+chmod +x ./scripts/run_full_benchmark_cycle.sh
+./scripts/run_full_benchmark_cycle.sh
+```
+- The full cycle starts selected vLLM presets one by one, starts the S-GAS API for each preset, and runs selected scenarios through all algorithm modes.
+- Generated CSV, JSON, and DOCX benchmark artifacts are stored in `logs/benchmarks`.
+- Batch summaries, vLLM/API logs, command snapshots, and per-preset response files are stored in `logs/benchmark_batch/<timestamp>`.
+
 ### Datasets
 - **Baldur's Gate 3**: Multi-turn dialogue dataset based on the game narrative
+- **GameDev process (not prepared yet)**: Technical process scenario for development-related retrieval
+- **Witcher 3 (not prepared yet)**: Narrative scenario based on the Wolf School context
 
 ## Contributing
 This is a research prototype and is under active development. If you encounter any issues:

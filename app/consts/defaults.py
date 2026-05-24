@@ -5,7 +5,7 @@ UPLOADS_DIR = Path("data/uploads")
 STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 
 # API
-API_VERSION = "v0.2.0-alpha.1"
+API_VERSION = "v0.2.1-alpha.1"
 
 # Embeddings
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2
