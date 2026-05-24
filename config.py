@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -10,9 +11,13 @@ class Settings:
 
     def __init__(self, config_path=None):
         if config_path is None:
-            current_file = Path(__file__)
-            project_root = current_file.parent
-            self.config_path = project_root / "cfg" / "system_params.json"
+            env_config_path = os.getenv("S_GAS_CONFIG_PATH")
+            if env_config_path:
+                self.config_path = Path(env_config_path)
+            else:
+                current_file = Path(__file__)
+                project_root = current_file.parent
+                self.config_path = project_root / "cfg" / "system_params.json"
         else:
             self.config_path = Path(config_path)
         self._data = self._load_config()
@@ -31,15 +36,16 @@ class Settings:
 
     def _get_default_config(self) -> dict:
         return {
-            "vllm": {"model_name": "Qwen/Qwen3-8B-AWQ", "gpu_memory_utilization": 0.8, "max_model_len": 8192, "api_base": "http://localhost:8000/v1", "temperature": 0.7, "top_p": 0.9, "max_tokens": 2048},
+            "vllm": {"model_name": "Qwen/Qwen3-8B-AWQ", "gpu_memory_utilization": 0.8, "max_model_len": 8192, "api_base": "http://localhost:8000/v1", "temperature": 0.7, "top_p": 0.9, "max_tokens": 2048, "request_timeout": 300},
             "embeddings": {"model": "sentence-transformers/all-MiniLM-L6-v2", "similarity_metric": "cosine"},
             "rag": {"top_k": 5},
             "chunking": {"max_chunk_size": 512, "overlap_size": 50},
             "database": {"chroma_persist_dir": "data/chroma_db", "collection_name": "documents"},
             "graph": {"alpha": 0.6, "beta": 0.4, "spacy_model": "ru_core_news_md"},
-            "swap": {"threshold": 0.3, "prefetch_count": 5, "memory_check_interval": 50, "debug_mode": False, "force_offload_on_iteration": -1},
+            "swap": {"enabled": False, "threshold": 0.3, "prefetch_count": 5, "memory_check_interval": 50, "debug_mode": False, "force_offload_on_iteration": -1, "proactive_offload": False, "gpu_pressure_free_ratio": 0.15},
             "prompt": {"enable_context_limit": True, "max_context_tokens": 5000},
             "api": {"host": "0.0.0.0", "port": 8080},
+            "benchmark": {"max_tokens": 128},
         }
 
     def __getitem__(self, key):

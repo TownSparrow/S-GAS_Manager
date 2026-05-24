@@ -1,17 +1,32 @@
 {
+  "profile": {
+    "name": "google/gemma-4-E2B-it stress",
+    "description": "Text-only Gemma 4 E2B-it stress preset with a 4k context window and unquantized vLLM settings."
+  },
   "vllm": {
-    "model_name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
-    "gpu_memory_utilization": 0.75,
-    "max_model_len": 8192,
+    "model_name": "google/gemma-4-E2B-it",
+    "gpu_memory_utilization": 0.65,
+    "max_model_len": 4096,
     "max_num_seqs": 1,
-    "max_num_batched_tokens": 8192,
-    "quantization": "awq_marlin",
+    "max_num_batched_tokens": 4096,
+    "swap_space": null,
+    "cpu_offload_gb": null,
+    "kv_cache_dtype": null,
+    "kv_offloading_size": null,
+    "quantization": "",
     "dtype": "auto",
     "trust_remote_code": true,
+    "enforce_eager": true,
+    "language_model_only": true,
+    "limit_mm_per_prompt": {
+      "image": 0,
+      "audio": 0,
+      "video": 0
+    },
     "api_base": "http://localhost:8000/v1",
     "temperature": 0.7,
     "top_p": 0.9,
-    "max_tokens": 1024,
+    "max_tokens": 512,
     "request_timeout": 300
   },
   "embeddings": {
@@ -19,11 +34,11 @@
     "similarity_metric": "cosine"
   },
   "rag": {
-    "top_k": 5
+    "top_k": 3
   },
   "chunking": {
-    "max_chunk_size": 512,
-    "overlap_size": 50,
+    "max_chunk_size": 256,
+    "overlap_size": 25,
     "similarity_treshold": 0.7
   },
   "database": {
@@ -35,37 +50,37 @@
     "beta": 0.3,
     "use_entities": true,
     "spacy_model": "ru_core_news_md",
-    "edge_top_p": 0.55
+    "edge_top_p": 0.5
   },
   "reranker": {
     "cross_encoder_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-    "cross_encoder_top_n": 20,
-    "cross_encoder_weight": 0.5
+    "cross_encoder_top_n": 8,
+    "cross_encoder_weight": 0.35
   },
   "prompt": {
     "enable_context_limit": true,
-    "max_context_tokens": 6500
+    "max_context_tokens": 3000
   },
   "swap": {
     "enabled": false,
-    "threshold": 0.3,
-    "prefetch_count": 5,
-    "memory_check_interval": 100,
+    "threshold": 0.2,
+    "prefetch_count": 2,
+    "memory_check_interval": 150,
     "force_offload_on_iteration": -1,
-    "retain_top_centrality_pct": 0.15,
-    "eviction_ram_threshold_gb": 12.0,
+    "retain_top_centrality_pct": 0.1,
+    "eviction_ram_threshold_gb": 8.0,
     "proactive_offload": false,
     "gpu_pressure_free_ratio": 0.15
   },
   "retrieval": {
-    "initial_top_k_multiplier": 3,
+    "initial_top_k_multiplier": 2,
     "exclude_used_chunks": false,
-    "min_similarity_score": 0.15,
-    "bm25_weight": 0.4,
-    "rrf_k": 30,
+    "min_similarity_score": 0.2,
+    "bm25_weight": 0.35,
+    "rrf_k": 40,
     "enable_sgas_filtering": true,
-    "semantic_anchor_threshold": 0.70,
-    "min_return_chunks": 5,
+    "semantic_anchor_threshold": 0.7,
+    "min_return_chunks": 3,
     "enable_dynamic_weights": true,
     "low_semantic_warning_threshold": 0.3
   },

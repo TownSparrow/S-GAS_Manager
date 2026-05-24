@@ -1,13 +1,28 @@
 {
+  "profile": {
+    "name": "google/gemma-4-E2B-it optimum",
+    "description": "Text-only Gemma 4 E2B-it balanced preset with an 8k context window and unquantized vLLM settings."
+  },
   "vllm": {
-    "model_name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
-    "gpu_memory_utilization": 0.75,
+    "model_name": "google/gemma-4-E2B-it",
+    "gpu_memory_utilization": 0.725,
     "max_model_len": 8192,
     "max_num_seqs": 1,
     "max_num_batched_tokens": 8192,
-    "quantization": "awq_marlin",
+    "swap_space": null,
+    "cpu_offload_gb": null,
+    "kv_cache_dtype": null,
+    "kv_offloading_size": null,
+    "quantization": "",
     "dtype": "auto",
     "trust_remote_code": true,
+    "enforce_eager": true,
+    "language_model_only": true,
+    "limit_mm_per_prompt": {
+      "image": 0,
+      "audio": 0,
+      "video": 0
+    },
     "api_base": "http://localhost:8000/v1",
     "temperature": 0.7,
     "top_p": 0.9,
@@ -22,8 +37,8 @@
     "top_k": 5
   },
   "chunking": {
-    "max_chunk_size": 512,
-    "overlap_size": 50,
+    "max_chunk_size": 384,
+    "overlap_size": 40,
     "similarity_treshold": 0.7
   },
   "database": {
@@ -39,8 +54,8 @@
   },
   "reranker": {
     "cross_encoder_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-    "cross_encoder_top_n": 20,
-    "cross_encoder_weight": 0.5
+    "cross_encoder_top_n": 12,
+    "cross_encoder_weight": 0.45
   },
   "prompt": {
     "enable_context_limit": true,
@@ -49,11 +64,11 @@
   "swap": {
     "enabled": false,
     "threshold": 0.3,
-    "prefetch_count": 5,
-    "memory_check_interval": 100,
+    "prefetch_count": 4,
+    "memory_check_interval": 120,
     "force_offload_on_iteration": -1,
     "retain_top_centrality_pct": 0.15,
-    "eviction_ram_threshold_gb": 12.0,
+    "eviction_ram_threshold_gb": 10.0,
     "proactive_offload": false,
     "gpu_pressure_free_ratio": 0.15
   },
@@ -64,7 +79,7 @@
     "bm25_weight": 0.4,
     "rrf_k": 30,
     "enable_sgas_filtering": true,
-    "semantic_anchor_threshold": 0.70,
+    "semantic_anchor_threshold": 0.7,
     "min_return_chunks": 5,
     "enable_dynamic_weights": true,
     "low_semantic_warning_threshold": 0.3

@@ -89,7 +89,17 @@ class ScoringService(IScorer):
     def beta(self) -> float:
         return self._beta
 
-    def compute_hybrid_scores(self, query_embedding: np.ndarray, chunks: List[Dict[str, Any]], chunk_embeddings: np.ndarray, graph_distances: Dict[str, float], query_text: str = "") -> List[Tuple[Dict[str, Any], float]]:
+    def compute_hybrid_scores(
+        self,
+        query_embedding: np.ndarray,
+        chunks: List[Dict[str, Any]],
+        chunk_embeddings: np.ndarray,
+        graph_distances: Dict[str, float],
+        query_text: str = "",
+        enable_dynamic_weights: Optional[bool] = None,
+        enable_semantic_anchor: bool = True,
+        enable_keyword_boost: bool = True,
+    ) -> List[Tuple[Dict[str, Any], float]]:
         if not isinstance(query_embedding, np.ndarray):
             query_embedding = np.array(query_embedding)
         if not isinstance(chunk_embeddings, np.ndarray):
@@ -103,7 +113,11 @@ class ScoringService(IScorer):
         # Dynamic weight classification based on query type
         alpha, beta = self._alpha, self._beta
         query_type = "default"
-        if self._enable_dynamic_weights and query_text:
+        use_dynamic_weights = (
+            self._enable_dynamic_weights
+            if enable_dynamic_weights is None else enable_dynamic_weights
+        )
+        if use_dynamic_weights and query_text:
             alpha, beta, query_type = classify_query_weights(
                 query_text, self._alpha, self._beta
             )
@@ -142,7 +156,7 @@ class ScoringService(IScorer):
         # Keyword boost: if the query contains content words that appear
         # in a chunk's text, boost its hybrid score.  This rescues chunks
         # that are lexically relevant but have weak embedding similarity.
-        if query_text:
+        if enable_keyword_boost and query_text:
             _stop = {'the','a','an','is','are','was','were','in','on','at','to',
                      'for','of','and','or','not','by','it','its','this','that',
                      'with','from','as','do','does','did','has','have','had',
@@ -159,17 +173,18 @@ class ScoringService(IScorer):
 
         # Semantic anchor: chunks with high semantic similarity get a guaranteed
         # minimum hybrid score (0.80) so they are not dropped by graph penalty.
-        anchor_threshold = self._semantic_anchor_threshold
-        for i in range(len(chunks)):
-            if semantic[i] >= anchor_threshold:
-                anchored = max(float(hybrid[i]), 0.80)
-                if anchored > hybrid[i]:
-                    logger.info(
-                        f"Semantic anchor: chunk {chunk_ids[i][-20:]} "
-                        f"sem={semantic[i]:.3f} >= {anchor_threshold}, "
-                        f"hybrid {hybrid[i]:.3f} -> {anchored:.3f}"
-                    )
-                    hybrid[i] = anchored
+        if enable_semantic_anchor:
+            anchor_threshold = self._semantic_anchor_threshold
+            for i in range(len(chunks)):
+                if semantic[i] >= anchor_threshold:
+                    anchored = max(float(hybrid[i]), 0.80)
+                    if anchored > hybrid[i]:
+                        logger.info(
+                            f"Semantic anchor: chunk {chunk_ids[i][-20:]} "
+                            f"sem={semantic[i]:.3f} >= {anchor_threshold}, "
+                            f"hybrid {hybrid[i]:.3f} -> {anchored:.3f}"
+                        )
+                        hybrid[i] = anchored
 
         scored = []
         for i, chunk in enumerate(chunks):
@@ -250,10 +265,27 @@ class ScoringService(IScorer):
             logger.warning(f"Cross-encoder reranking failed: {e}")
             return scored
 
-    def rerank_chunks(self, query_embedding: np.ndarray, chunks: List[Dict[str, Any]], chunk_embeddings: np.ndarray, graph_distances: Dict[str, float], top_k: Optional[int] = None, min_score: float = 0.0, query_text: str = "", enable_adaptive_k: bool = True) -> List[Dict[str, Any]]:
+    def rerank_chunks(
+        self,
+        query_embedding: np.ndarray,
+        chunks: List[Dict[str, Any]],
+        chunk_embeddings: np.ndarray,
+        graph_distances: Dict[str, float],
+        top_k: Optional[int] = None,
+        min_score: float = 0.0,
+        query_text: str = "",
+        enable_adaptive_k: bool = True,
+        enable_cross_encoder: bool = True,
+        enable_dynamic_weights: Optional[bool] = None,
+        enable_semantic_anchor: bool = True,
+        enable_keyword_boost: bool = True,
+    ) -> List[Dict[str, Any]]:
         scored = self.compute_hybrid_scores(
             query_embedding, chunks, chunk_embeddings, graph_distances,
             query_text=query_text,
+            enable_dynamic_weights=enable_dynamic_weights,
+            enable_semantic_anchor=enable_semantic_anchor,
+            enable_keyword_boost=enable_keyword_boost,
         )
 
         # Soft filtering: demote low-semantic chunks to the end instead of
@@ -266,7 +298,7 @@ class ScoringService(IScorer):
         # Cross-encoder reranking FIRST on up to cross_encoder_top_n candidates.
         # This ensures the cross-encoder sees the full candidate pool (e.g. 20)
         # before adaptive K or top_k trim it down to the final set (e.g. 5).
-        if self._cross_encoder and query_text:
+        if enable_cross_encoder and self._cross_encoder and query_text:
             scored = self._apply_cross_encoder(query_text, scored)
 
         # Adaptive K: trim low-confidence tail AFTER cross-encoder.
@@ -285,6 +317,9 @@ class ScoringService(IScorer):
             all_scored = self.compute_hybrid_scores(
                 query_embedding, chunks, chunk_embeddings, graph_distances,
                 query_text=query_text,
+                enable_dynamic_weights=enable_dynamic_weights,
+                enable_semantic_anchor=enable_semantic_anchor,
+                enable_keyword_boost=enable_keyword_boost,
             )
             existing_ids = {c.get('id') for c in reranked}
             for c, _ in all_scored:

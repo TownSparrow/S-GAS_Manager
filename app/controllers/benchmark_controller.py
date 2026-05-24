@@ -37,6 +37,13 @@ class BenchmarkController:
             logger.error(f"Failed to list scenarios: {e}")
             return {"status": "error", "message": str(e), "scenarios": []}
 
+    async def get_progress(self, scenario_name: str):
+        try:
+            return self._benchmark_runner.get_progress(scenario_name)
+        except Exception as e:
+            logger.error(f"Failed to get benchmark progress: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     async def run_benchmark(self, scenario_name: str, session_id: Optional[str] = None,
                             fresh_server: bool = False):
         try:
@@ -48,8 +55,17 @@ class BenchmarkController:
                 fresh_server=fresh_server,
             )
             return {
-                "status": "success",
+                "status": result.get("status", "success"),
                 "scenario": result['scenario'],
+                "modes": {
+                    mode: {
+                        "label": mode_result.get("label", mode),
+                        "session_id": mode_result["session_id"],
+                        "summary": mode_result["summary"],
+                        "files": {"csv": mode_result["csv_file"], "json": mode_result["json_file"]},
+                    }
+                    for mode, mode_result in result.get("modes", {}).items()
+                },
                 "sgas": {
                     "session_id": result['sgas']['session_id'],
                     "summary": result['sgas']['summary'],
@@ -61,6 +77,11 @@ class BenchmarkController:
                     "files": {"csv": result['baseline']['csv_file'], "json": result['baseline']['json_file']},
                 },
                 "comparison": result['comparison'],
+                "report_file": result.get('docx_report_file', ''),
+                "files": {
+                    "comparison": result.get('comparison_file', ''),
+                    "docx_report": result.get('docx_report_file', ''),
+                },
             }
         except Exception as e:
             logger.error(f"Benchmark failed: {e}")
@@ -70,9 +91,13 @@ class BenchmarkController:
 
     async def run_single_mode(self, scenario_name: str, mode: str = "sgas",
                               fresh_server: bool = False):
-        """Running benchmark in a single mode only (sgas or baseline)."""
-        if mode not in ("sgas", "baseline"):
-            raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}. Use 'sgas' or 'baseline'.")
+        """Running benchmark in a single mode only."""
+        valid_modes = ("baseline", "hybrid_rag", "sgas_no_filtering", "sgas")
+        if mode not in valid_modes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid mode: {mode}. Use one of: {', '.join(valid_modes)}.",
+            )
         try:
             result = await self._benchmark_runner.run_single_mode(
                 scenario_name=scenario_name,
@@ -82,9 +107,10 @@ class BenchmarkController:
                 fresh_server=fresh_server,
             )
             return {
-                "status": "success",
+                "status": result.get("status", "success"),
                 "scenario": result['scenario'],
                 "mode": result['mode'],
+                "label": result.get('label', result['mode']),
                 "session_id": result['session_id'],
                 "summary": result['summary'],
                 "files": {"csv": result['csv_file'], "json": result['json_file']},
@@ -196,4 +222,20 @@ class BenchmarkController:
             return {"status": "success", "scenario": scenario_name, "type": "single", "results": data}
         except Exception as e:
             logger.error(f"Failed to get results: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def download_result_file(self, filename: str):
+        """Safely download a generated benchmark artifact from logs/benchmarks."""
+        try:
+            results_dir = Path("logs/benchmarks").resolve()
+            file_path = (results_dir / filename).resolve()
+            if results_dir not in file_path.parents and file_path != results_dir:
+                raise HTTPException(status_code=400, detail="Invalid benchmark file path")
+            if not file_path.exists() or not file_path.is_file():
+                raise HTTPException(status_code=404, detail=f"Benchmark file not found: {filename}")
+            return FileResponse(str(file_path), filename=file_path.name)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to download benchmark file: {e}")
             raise HTTPException(status_code=500, detail=str(e))

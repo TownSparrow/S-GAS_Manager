@@ -10,3 +10,6 @@ class IVLLMClient:
 
     async def flush_cache(self) -> bool:
         raise NotImplementedError
+
+    async def get_runtime_metrics(self) -> Dict[str, Any]:
+        raise NotImplementedError

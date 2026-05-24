@@ -77,8 +77,8 @@ def create_app(settings: Settings) -> FastAPI:
         low_semantic_warning_threshold=retrieval_config.get('low_semantic_warning_threshold', 0.3),
     )
     swap_config = settings.get('swap', {})
-    swap_service = SwapService(threshold=swap_config['threshold'], prefetch_count=swap_config['prefetch_count'], memory_check_interval_ms=swap_config['memory_check_interval'], max_gpu_memory_tokens=settings['vllm']['max_model_len'], force_offload_on_iteration=swap_config.get('force_offload_on_iteration', -1), retain_top_centrality_pct=swap_config.get('retain_top_centrality_pct', 0.15), eviction_ram_threshold_gb=swap_config.get('eviction_ram_threshold_gb', 12.0))
-    vllm_service = VLLMService(api_base=settings['vllm']['api_base'], model_name=settings['vllm']['model_name'], default_temperature=settings['vllm']['temperature'], default_top_p=settings['vllm']['top_p'], default_max_tokens=settings['vllm']['max_tokens'])
+    swap_service = SwapService(threshold=swap_config['threshold'], prefetch_count=swap_config['prefetch_count'], memory_check_interval_ms=swap_config['memory_check_interval'], max_gpu_memory_tokens=settings['vllm']['max_model_len'], force_offload_on_iteration=swap_config.get('force_offload_on_iteration', -1), retain_top_centrality_pct=swap_config.get('retain_top_centrality_pct', 0.15), eviction_ram_threshold_gb=swap_config.get('eviction_ram_threshold_gb', 12.0), proactive_offload=swap_config.get('proactive_offload', False), gpu_pressure_free_ratio=swap_config.get('gpu_pressure_free_ratio', 0.15), enabled=swap_config.get('enabled', False))
+    vllm_service = VLLMService(api_base=settings['vllm']['api_base'], model_name=settings['vllm'].get('served_model_name', settings['vllm']['model_name']), default_temperature=settings['vllm']['temperature'], default_top_p=settings['vllm']['top_p'], default_max_tokens=settings['vllm']['max_tokens'], max_model_len=settings['vllm']['max_model_len'], request_timeout=settings['vllm'].get('request_timeout', 300))
 
     kv_monitor = KVCacheMonitor()
 
@@ -184,6 +184,10 @@ def create_app(settings: Settings) -> FastAPI:
     async def list_scenarios():
         return await benchmark_ctrl.list_scenarios()
 
+    @app.get("/api/benchmark/progress/{scenario_name}")
+    async def get_benchmark_progress(scenario_name: str):
+        return await benchmark_ctrl.get_progress(scenario_name)
+
     @app.post("/api/benchmark/run/{scenario_name}")
     async def run_benchmark(scenario_name: str, session_id: Optional[str] = None,
                             fresh_server: bool = False):
@@ -203,6 +207,10 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/benchmark/results/{scenario_name}")
     async def get_benchmark_results(scenario_name: str):
         return await benchmark_ctrl.get_benchmark_results(scenario_name)
+
+    @app.get("/api/benchmark/download/{filename}")
+    async def download_benchmark_file(filename: str):
+        return await benchmark_ctrl.download_result_file(filename)
 
     @app.get("/graph")
     async def graph_visualization_ui():

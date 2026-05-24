@@ -2,6 +2,7 @@ from typing import List, Dict, Optional
 import logging
 from sentence_transformers import util
 import numpy as np
+import re
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,50 @@ class GenerationEvaluator:
             'rouge2': scores['rouge2'].fmeasure,
             'rougeL': scores['rougeL'].fmeasure
         }
+
+    @staticmethod
+    def _tokenize(text: str) -> List[str]:
+        """Language-agnostic-ish tokenizer for local answer overlap metrics."""
+        return re.findall(r"\w+", (text or "").lower(), flags=re.UNICODE)
+
+    def calculate_token_f1(
+        self,
+        generated_answer: str,
+        reference_answer: str
+    ) -> float:
+        """Token-F1 between generated and reference answers, no external judge."""
+        gen_tokens = self._tokenize(generated_answer)
+        ref_tokens = self._tokenize(reference_answer)
+        if not gen_tokens or not ref_tokens:
+            return 0.0
+
+        ref_counts = {}
+        for token in ref_tokens:
+            ref_counts[token] = ref_counts.get(token, 0) + 1
+
+        overlap = 0
+        for token in gen_tokens:
+            if ref_counts.get(token, 0) > 0:
+                overlap += 1
+                ref_counts[token] -= 1
+
+        if overlap == 0:
+            return 0.0
+        precision = overlap / len(gen_tokens)
+        recall = overlap / len(ref_tokens)
+        return 2 * precision * recall / (precision + recall)
+
+    def calculate_exact_match(
+        self,
+        generated_answer: str,
+        reference_answer: str
+    ) -> float:
+        """Normalized exact match for deterministic answer checks."""
+        gen = " ".join(self._tokenize(generated_answer))
+        ref = " ".join(self._tokenize(reference_answer))
+        if not ref:
+            return 0.0
+        return 1.0 if gen == ref else 0.0
     
     def evaluate_generation(
         self,
@@ -94,10 +139,14 @@ class GenerationEvaluator:
         # Calculating ROUGE
         rouge_scores = self.calculate_rouge(generated_answer, reference_answer)
         rougeL = rouge_scores.get('rougeL', 0.0)
+        token_f1 = self.calculate_token_f1(generated_answer, reference_answer)
+        exact_match = self.calculate_exact_match(generated_answer, reference_answer)
         is_correct = bertscore >= self.bertscore_threshold or rougeL >= 0.40
 
         result = {
             'bertscore': bertscore,
+            'token_f1': token_f1,
+            'exact_match': exact_match,
             'is_correct': is_correct,
             'bertscore_threshold': self.bertscore_threshold,
             'rouge_scores': rouge_scores,
@@ -133,12 +182,16 @@ class GenerationEvaluator:
         avg_rouge1 = sum(r['rouge_scores']['rouge1'] for r in results) / len(results) if results else 0.0
         avg_rouge2 = sum(r['rouge_scores']['rouge2'] for r in results) / len(results) if results else 0.0
         avg_rougeL = sum(r['rouge_scores']['rougeL'] for r in results) / len(results) if results else 0.0
+        avg_token_f1 = sum(r['token_f1'] for r in results) / len(results) if results else 0.0
+        avg_exact_match = sum(r['exact_match'] for r in results) / len(results) if results else 0.0
         
         return {
             'multi_turn_accuracy': accuracy,
             'total_turns': len(generated_answers),
             'correct_turns': correct_count,
             'avg_bertscore': avg_bertscore,
+            'avg_token_f1': avg_token_f1,
+            'avg_exact_match': avg_exact_match,
             'avg_rouge1': avg_rouge1,
             'avg_rouge2': avg_rouge2,
             'avg_rougeL': avg_rougeL,
