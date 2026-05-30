@@ -700,12 +700,17 @@ class GraphService(IGraphBuilder):
     def export_graph_info(self) -> Dict[str, Any]:
         if self._graph is None:
             return {}
+
+        def edge_weight(data: Dict[str, Any]) -> float:
+            weight = data.get('weight', 0.0)
+            return float(weight if weight is not None else 0.0)
+
         nodes = [
             {'id': n, 'type': d.get('type'), 'label': d.get('label'), 'text': d.get('text', d.get('word', ''))[:50]}
             for n, d in self._graph.nodes(data=True)
         ]
         edges = [
-            {'source': u, 'target': v, 'weight': d.get('weight'), 'relation': d.get('relation')}
+            {'source': u, 'target': v, 'weight': edge_weight(d), 'relation': d.get('relation')}
             for u, v, d in self._graph.edges(data=True)
         ]
         return {'nodes': nodes, 'edges': edges, 'statistics': self.get_graph_statistics()}

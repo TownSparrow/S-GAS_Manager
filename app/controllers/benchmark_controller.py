@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.consts.defaults import STATIC_DIR
+from app.utils.serialization import serialize_json_safe
 
 logger = logging.getLogger(__name__)
 
@@ -187,14 +188,14 @@ class BenchmarkController:
                         logger.warning(f"Could not read graph snapshot: {snap_err}")
 
             stats = data.get('statistics', {})
-            return {
+            return serialize_json_safe({
                 "status": "success",
                 "statistics": stats,
                 "nodes": nodes,
                 "edges": data.get('edges', []),
                 "node_count": len(nodes),
                 "edge_count": len(data.get('edges', [])),
-            }
+            })
         except Exception as e:
             logger.error(f"Graph data export failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
